@@ -1,0 +1,95 @@
+# ---------------------------------------------------------------------------
+# ResearchMind MCP — Docker build context exclusions
+#
+# Goals, in priority order:
+#   1. Prevent secrets (.env) from ever entering an image layer.
+#   2. Keep build contexts small so builds are fast and images are lean.
+#   3. Avoid cache-busting the build on irrelevant file changes.
+#
+# Verified against the build contexts declared in infra/docker-compose.yml.
+# ---------------------------------------------------------------------------
+
+# --- Secrets — highest priority -------------------------------------------
+# All Dockerfiles use `COPY . .`; without these rules a developer's local .env
+# would be baked into a published image layer.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# --- Version control -------------------------------------------------------
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# --- Python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+ENV/
+env/
+
+# --- Test, type & lint caches ----------------------------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# --- Tests -----------------------------------------------------------------
+# Not required at runtime. CI runs the suite from the source checkout.
+tests/
+evaluation/
+
+# --- Node / Next.js --------------------------------------------------------
+# Dependencies are installed inside the image via `npm ci`; copying the host's
+# node_modules would be both slow and potentially platform-incompatible.
+node_modules/
+frontend/node_modules/
+.next/
+frontend/.next/
+out/
+frontend/out/
+.turbo/
+*.tsbuildinfo
+.eslintcache
+
+# --- Documentation ---------------------------------------------------------
+# Excluded from the runtime image; docs live in the repository, not the container.
+docs/
+*.md
+!README.md
+CLAUDE.md
+
+# --- Local service data ----------------------------------------------------
+data/
+pgdata/
+postgres_data/
+qdrant_data/
+qdrant_storage/
+redis_data/
+*.db
+*.sqlite3
+
+# --- Runtime artifacts -----------------------------------------------------
+uploads/
+storage/
+logs/
+*.log
+tmp/
+
+# --- IDE / OS --------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

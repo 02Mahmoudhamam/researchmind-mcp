@@ -1,0 +1,142 @@
+# ---------------------------------------------------------------------------
+# ResearchMind MCP — Git ignore rules
+# Reflects the approved MVP stack: Python/Poetry backend, Next.js frontend,
+# Docker/Compose infrastructure, Postgres + Qdrant + Redis services.
+# ---------------------------------------------------------------------------
+
+# --- Secrets & environment -------------------------------------------------
+# Never commit real environment files. Examples are the only exception.
+.env
+.env.*
+!.env.example
+!frontend/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials.json
+service-account*.json
+
+# --- Python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+sdist/
+wheels/
+*.egg-info/
+*.egg
+MANIFEST
+pip-log.txt
+pip-delete-this-directory.txt
+
+# --- Python virtual environments -------------------------------------------
+.venv/
+venv/
+ENV/
+env/
+.python-version
+
+# --- Test, type & lint caches ----------------------------------------------
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+.tox/
+.nox/
+.hypothesis/
+
+# --- Coverage --------------------------------------------------------------
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.cover
+nosetests.xml
+
+# --- Node / Next.js (frontend) ---------------------------------------------
+node_modules/
+.next/
+out/
+.turbo/
+.vercel/
+*.tsbuildinfo
+next-env.d.ts
+.npm/
+.yarn/
+.pnp.*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.eslintcache
+
+# --- Docker / Compose runtime ----------------------------------------------
+docker-compose.override.yml
+.docker/
+
+# --- Local service data volumes --------------------------------------------
+# Postgres, Qdrant and Redis state must never be committed.
+data/
+pgdata/
+postgres_data/
+qdrant_data/
+qdrant_storage/
+redis_data/
+dump.rdb
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Application runtime artifacts -----------------------------------------
+uploads/
+storage/
+logs/
+*.log
+tmp/
+temp/
+
+# --- ML / embedding model caches -------------------------------------------
+# FastEmbed (BAAI/bge-small-en-v1.5) downloads weights locally; they are baked
+# into the image at build time and must never enter version control.
+.fastembed_cache/
+models/
+*.onnx
+*.safetensors
+*.bin
+
+# --- Evaluation outputs ----------------------------------------------------
+# The golden dataset is committed; generated reports are not.
+evaluation/results/
+evaluation/*.report.json
+
+# --- IDE / editor ----------------------------------------------------------
+# .vscode/ is excluded wholesale: this tree contains a 1.1 GB VS Code C/C++
+# IntelliSense database (browse.vc.db) left over from an unrelated ROS2
+# workspace. It exceeds GitHub's 100 MB per-file limit and must never be staged.
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# --- OS --------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
