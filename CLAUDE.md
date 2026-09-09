@@ -6,10 +6,10 @@ Persistent context for future sessions. Derived from a read-only audit (2026-09-
 
 | Doc | What it holds |
 |---|---|
-| [docs/ARCHITECTURE_AUDIT.md](docs/ARCHITECTURE_AUDIT.md) | Full evidence-based audit: what exists, what is stubbed, trade-offs, P0/P1/P2 gap analysis |
-| [docs/PROJECT_VISION.md](docs/PROJECT_VISION.md) | What the system is for, the end-to-end user journey, and where the stated vision contradicts itself or is over-scoped |
-| [docs/DECISIONS.md](docs/DECISIONS.md) | **ADR-001…005 — the five architectural forks.** All marked `DEFAULT — pending owner approval` |
-| [docs/COMPLETION_PLAN.md](docs/COMPLETION_PLAN.md) | Phased roadmap 0–6, vertical-slice-first, with a Definition of Done per phase |
+| [docs/architecture/AUDIT-2026-09.md](docs/architecture/AUDIT-2026-09.md) | Full evidence-based audit: what exists, what is stubbed, trade-offs, P0/P1/P2 gap analysis |
+| [docs/roadmap/PROJECT_VISION.md](docs/roadmap/PROJECT_VISION.md) | What the system is for, the end-to-end user journey, and where the stated vision contradicts itself or is over-scoped |
+| [docs/adr/0000-original-decision-record.md](docs/adr/0000-original-decision-record.md) | **ADR-001…005 — the five architectural forks.** All marked `DEFAULT — pending owner approval` |
+| [docs/roadmap/COMPLETION_PLAN.md](docs/roadmap/COMPLETION_PLAN.md) | Phased roadmap 0–6, vertical-slice-first, with a Definition of Done per phase |
 
 > **Status: the five ADRs are NOT yet approved. No implementation should begin until the owner
 > approves or overrides them** — every phase in the completion plan assumes those defaults.
@@ -31,7 +31,7 @@ template in one pass.
 
 **The docs describe the system in the present tense as though it works. It does not.**
 When reasoning about this repo, trust the code, not `README.md` / `docs/*.md`.
-`docs/ROADMAP.md` is the only honest signal — Phase 1 items are all unchecked.
+`docs/roadmap/LEGACY-ROADMAP.md` is the only honest signal — Phase 1 items are all unchecked.
 
 Not a git repository (no `.git`). No CI. No `LICENSE`. No `.gitignore`. No lock file.
 
@@ -205,7 +205,7 @@ Qdrant will fail.
 
 ## Plan of record
 
-Phased roadmap lives in [docs/COMPLETION_PLAN.md](docs/COMPLETION_PLAN.md). Summary:
+Phased roadmap lives in [docs/roadmap/COMPLETION_PLAN.md](docs/roadmap/COMPLETION_PLAN.md). Summary:
 
 | Phase | Goal | Effort |
 |---|---|---|

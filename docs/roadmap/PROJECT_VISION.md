@@ -3,7 +3,7 @@
 **Author:** AI Solutions Architect review
 **Date:** 2026-09-08
 **Status:** Proposed — supersedes the implicit vision in `README.md`, pending owner approval
-**Companions:** [ARCHITECTURE_AUDIT.md](ARCHITECTURE_AUDIT.md) · [DECISIONS.md](DECISIONS.md) · [COMPLETION_PLAN.md](COMPLETION_PLAN.md)
+**Companions:** [ARCHITECTURE_AUDIT.md](../architecture/AUDIT-2026-09.md) · [DECISIONS.md](../adr/0000-original-decision-record.md) · [COMPLETION_PLAN.md](COMPLETION_PLAN.md)
 
 Evidence labels: `[FACT — file:line]` directly read · `[INFERENCE]` reasoned from facts · `[ASSUMPTION]` needs owner confirmation.
 
@@ -99,7 +99,7 @@ and JWT auth are all unchecked. Every other doc contradicts it.
 ### 4.3 Where the stated vision is internally contradictory
 
 Four contradictions are in the repository *as design*, not as missing code. Each must be
-resolved by decision, not by implementation — see [DECISIONS.md](DECISIONS.md).
+resolved by decision, not by implementation — see [DECISIONS.md](../adr/0000-original-decision-record.md).
 
 1. **The MCP server is deployed in a way it cannot work.**
    `[FACT — mcp/server/server.py:77-80]` The server speaks **stdio only**. `[FACT — docker-compose.yml:17-23]`

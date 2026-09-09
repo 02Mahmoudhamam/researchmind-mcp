@@ -1,9 +1,15 @@
+> [!WARNING]
+> **SUPERSEDED — retained for provenance.**
+> This is the original pre-approval decision record. Its five decisions were
+> reviewed, and are now recorded as accepted ADRs in this directory
+> (`0001`–`0009`). Where they differ, the numbered ADRs are authoritative.
+
 # Architecture Decision Records
 
 **Date:** 2026-09-08 · **Status of every ADR below: `DEFAULT — pending owner approval`**
 
 These five decisions resolve the architectural forks the audit found unresolved.
-[COMPLETION_PLAN.md](COMPLETION_PLAN.md) assumes every default below; each ADR ends with an
+[COMPLETION_PLAN.md](../roadmap/COMPLETION_PLAN.md) assumes every default below; each ADR ends with an
 **If you override** block naming exactly which phases and files change.
 
 Evidence labels: `[FACT — file:line]` · `[INFERENCE]` · `[ASSUMPTION]`.

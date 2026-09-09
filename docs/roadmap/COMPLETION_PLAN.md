@@ -1,9 +1,9 @@
 # ResearchMind MCP — Completion Plan
 
-**Date:** 2026-09-08 · **Status:** Proposed, pending approval of [DECISIONS.md](DECISIONS.md)
-**Companions:** [PROJECT_VISION.md](PROJECT_VISION.md) · [ARCHITECTURE_AUDIT.md](ARCHITECTURE_AUDIT.md)
+**Date:** 2026-09-08 · **Status:** Proposed, pending approval of [DECISIONS.md](../adr/0000-original-decision-record.md)
+**Companions:** [PROJECT_VISION.md](PROJECT_VISION.md) · [ARCHITECTURE_AUDIT.md](../architecture/AUDIT-2026-09.md)
 
-> **This plan assumes the five `DEFAULT` decisions in [DECISIONS.md](DECISIONS.md).** Each ADR
+> **This plan assumes the five `DEFAULT` decisions in [DECISIONS.md](../adr/0000-original-decision-record.md).** Each ADR
 > carries an *"If you override"* block; every task below that would change is tagged
 > **`⟲ ADR-00n`**. Nothing here is implemented — this is a plan awaiting approval.
 

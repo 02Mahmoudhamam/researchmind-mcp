@@ -1,3 +1,8 @@
+> [!WARNING]
+> **SUPERSEDED — retained for provenance.**
+> This was the original aspirational roadmap. The authoritative plan is
+> [MILESTONES.md](MILESTONES.md) and [COMPLETION_PLAN.md](COMPLETION_PLAN.md).
+
 # Scalability Roadmap
 
 ## Phase 1 — MVP (Current)

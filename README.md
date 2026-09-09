@@ -25,10 +25,9 @@ docker-compose up -d
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md)
-- [API Reference](docs/API.md)
-- [Agent Guide](docs/AGENTS.md)
-- [MCP Guide](docs/MCP.md)
+- [Architecture](docs/architecture/ARCHITECTURE.md)
+- [Agent Guide](docs/architecture/AGENTS.md)
+- [MCP Guide](docs/architecture/MCP.md)
 
 ## Tech Stack
 

@@ -1,3 +1,10 @@
+> [!WARNING]
+> **TARGET STATE — NOT CURRENT BEHAVIOUR.**
+> This document describes the system as intended, not as implemented. As of the
+> repository baseline, the described behaviour does not execute. See
+> [AUDIT-2026-09.md](AUDIT-2026-09.md) for the verified current state and
+> [../roadmap/MILESTONES.md](../roadmap/MILESTONES.md) for the delivery plan.
+
 # Agent Reference
 
 ## Agent Registry
