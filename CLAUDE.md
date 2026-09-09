@@ -55,7 +55,7 @@ Desktop) can drive them.
 
 ## Stack
 
-Python `^3.11`, Poetry, FastAPI + Uvicorn, `mcp` SDK, `anthropic`, Pydantic v2 +
+Python `^3.12`, Poetry, FastAPI + Uvicorn, `mcp` SDK, `anthropic`, Pydantic v2 +
 pydantic-settings, `qdrant-client`, `redis`, `pymupdf`, `langchain-text-splitters`,
 `python-jose`, `passlib`, `structlog`, `httpx`.
 Frontend: Next.js 14 (App Router), React 18, TypeScript, Tailwind, axios, react-query,
@@ -64,7 +64,9 @@ zustand, recharts.
 **Declared but never imported:** `anthropic`, `pymupdf`/`fitz`, `langchain-text-splitters`,
 `passlib`, `python-multipart` — these map exactly to the five stubbed subsystems.
 **Required but undeclared:** `openai` (the default embedding model is
-`text-embedding-3-small`), `email-validator` (needed by `EmailStr` in three models).
+`text-embedding-3-small`). `email-validator` was also missing and is now declared via
+the `pydantic[email]` extra (M0/S0.1); before that, `shared/models/user.py` and
+`backend/api/schemas/auth.py` could not be imported at all.
 
 ---
 
@@ -84,8 +86,9 @@ Routes are mounted under `/api/v1/{auth,documents,agents,search,workspace}`.
 
 `cp .env.example .env && docker-compose up -d` is the documented path. It fails:
 
-1. **`poetry check` fails** — `python = "^3.11"` is an invalid key in `[tool.poetry]`
-   ([pyproject.toml:6](pyproject.toml#L6)). Both Python images abort during `poetry install`.
+1. ~~**`poetry check` fails**~~ — **RESOLVED in M0/S0.1.** The invalid `python` key was
+   removed from `[tool.poetry]`; `poetry check` now returns "All set!", `package-mode = false`
+   is declared, and a `poetry.lock` is committed.
 2. **`import mcp` resolves to this repo's `mcp/` directory**, shadowing the SDK.
    Verified: `mcp.server` has no `Server` attribute. The MCP server cannot import.
 3. **Frontend build breaks** — `Dockerfile.frontend` copies `.next/standalone`, which needs
@@ -95,7 +98,8 @@ Routes are mounted under `/api/v1/{auth,documents,agents,search,workspace}`.
 Also note: **without a `.env`, almost nothing imports.** `ANTHROPIC_API_KEY` has no default,
 and five modules call `get_settings()` at import time (`main.py:6`, `backend/api/app.py:7`,
 `backend/security/jwt_handler.py:8`, `vector_db/qdrant/config.py:5`,
-`memory_system/redis/config.py:5`). Test collection fails for this reason.
+`memory_system/redis/config.py:5`). Test collection previously failed for this reason; `tests/conftest.py` (M0/S0.1) now supplies
+deterministic settings so the suite no longer depends on a developer's `.env`.
 
 Tests: `pytest` (`pytest.ini` sets `asyncio_mode = auto`, `testpaths = tests`).
 Two of the four tests fail by construction; the two that pass are vacuous (they assert a
@@ -194,14 +198,15 @@ Qdrant will fail.
 ## Top blockers (P0 — full list in the audit)
 
 1. **`mcp/` shadows the `mcp` SDK** — rename to `mcp_integration/` or adopt a src-layout.
-2. **`pyproject.toml:6`** — invalid `python` key breaks every container build.
+2. ~~**`pyproject.toml:6`**~~ — **RESOLVED in M0/S0.1.**
 3. **No system of record** — blocks auth, documents, ownership and multi-tenancy together.
 4. **Auth fails open** — `HTTPBearer` rejects a *missing* header (so it looks correct), but
    `get_current_user` verifies nothing: any non-empty Bearer string is accepted.
 5. **Embedding provider unresolved** — OpenAI default in an Anthropic-only project.
 6. **Transport contradiction** — stdio server code vs. `MCP_SERVER_PORT=8001` and a compose
    container with no stdin and no ports. Must be decided before downstream work.
-7. **No `LICENSE`**, no `.gitignore`, no `.dockerignore` (`COPY . .` would bake `.env` into images).
+7. ~~**No `LICENSE`**, no `.gitignore`, no `.dockerignore`~~ — **RESOLVED in the Repository
+   Foundation phase (v0.0.1).** All three are committed.
 
 ## Plan of record
 
