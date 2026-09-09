@@ -3,6 +3,7 @@ name = "researchmind-mcp"
 version = "0.1.0"
 description = "AI Research Assistant based on Model Context Protocol"
 authors = ["ResearchMind Team"]
+license = "Apache-2.0"
 python = "^3.11"
 
 [tool.poetry.dependencies]
