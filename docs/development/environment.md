@@ -14,24 +14,35 @@ different runtimes and different trust boundaries:
 
 ### Why the split
 
-`Settings` uses pydantic-settings, which defaults to `extra="forbid"`. The
-original single `.env.example` contained two frontend-only variables
-(`NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_APP_NAME`) that `Settings` does not
-declare, so the documented Quick Start —
+pydantic-settings defaults to `extra="forbid"`. The original single
+`.env.example` contained two frontend-only variables (`NEXT_PUBLIC_API_URL`,
+`NEXT_PUBLIC_APP_NAME`) that `Settings` does not declare, so the documented
+Quick Start —
 
 ```bash
 cp .env.example .env
 ```
 
 — caused `Settings()` to raise `ValidationError: extra_forbidden` before the
-application could start. Splitting the files fixes the first command a new
-contributor runs.
+application could start.
+
+That was fixed in two steps. Splitting the files by consumer removed the
+immediate cause. Sprint M0/S0.1 then set `extra="ignore"` on `Settings`, so an
+undeclared key in a local `.env` is skipped instead of crashing the process.
+Verified: a `.env` containing `DATABASE_URL` (a key Milestone M1 introduces)
+previously raised `ValidationError` and now loads cleanly, while required
+fields such as `ANTHROPIC_API_KEY` are still enforced.
+
+Keeping the files split still matters. `extra="ignore"` stops an unknown key
+from being fatal; it does not make frontend configuration belong in the backend
+environment file.
 
 ### The rule
 
 **A variable is added to `.env.example` in the same commit as the `Settings`
-field that consumes it.** Never earlier. Adding a variable the backend does not
-declare re-creates the failure above.
+field that consumes it.** Never earlier. An unknown key is now tolerated rather
+than fatal, but an example file that advertises variables the backend does not
+read is misleading.
 
 Anything prefixed `NEXT_PUBLIC_` is **embedded in the browser bundle and is
 public**. Never put a secret behind that prefix.
