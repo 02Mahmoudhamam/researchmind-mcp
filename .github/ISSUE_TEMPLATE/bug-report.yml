@@ -1,0 +1,72 @@
+name: Bug Report
+description: Something behaves incorrectly.
+labels: ["type: bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > **Security issues do not belong here.** If this is a vulnerability,
+        > report it privately via Security → Report a vulnerability. See
+        > `SECURITY.md`.
+        >
+        > **Redact all credentials before pasting logs.** If a secret appears in
+        > your output, rotate it first and replace the value with `[REDACTED]`.
+
+        Many components are known to be unimplemented — check the Development
+        Status table in the README before filing. A stub behaving like a stub
+        is tracked work, not a bug.
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: |
+        Commit/tag:
+        OS:
+        Python:
+        Docker Compose:
+        Deployment: local / compose
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or traceback
+      description: Credentials redacted.
+      render: shell
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have removed all credentials, tokens and personal data from this report.
+          required: true
+        - label: This is not a security vulnerability (those are reported privately).
+          required: true

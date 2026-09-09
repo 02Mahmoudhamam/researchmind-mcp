@@ -1,0 +1,73 @@
+name: Sprint Task / Feature
+description: A unit of work from the milestone roadmap, or a proposed feature.
+title: "[MX/SYY] "
+labels: ["type: feature", "status: ready"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Work follows the approved roadmap in `docs/roadmap/MILESTONES.md`.
+        Milestone ordering is not arbitrary — check the dependency before
+        proposing that something start early.
+
+  - type: input
+    id: milestone
+    attributes:
+      label: Milestone / Sprint
+      description: e.g. M4/S4.3. Use "unscheduled" if this is not yet on the plan.
+      placeholder: M4/S4.3
+    validations:
+      required: true
+
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: What concrete capability becomes possible once this is done?
+    validations:
+      required: true
+
+  - type: textarea
+    id: prerequisites
+    attributes:
+      label: Prerequisites
+      description: What must already exist? Link blocking issues.
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Files, modules and interfaces affected. Use real repository paths.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: >-
+        Measurable, not aspirational. "Invalid JWTs return 401", not
+        "authentication works".
+      placeholder: |
+        - [ ] Forged bearer token returns 401
+        - [ ] User A cannot retrieve user B's chunks
+    validations:
+      required: true
+
+  - type: textarea
+    id: tests
+    attributes:
+      label: Tests required
+      description: Which tests must pass? A test that cannot fail does not count.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: impact
+    attributes:
+      label: Impact
+      options:
+        - label: Touches authentication, authorisation or tenant isolation
+        - label: Changes the database schema (needs a migration)
+        - label: Changes a public API or MCP tool contract
+        - label: Requires a new ADR

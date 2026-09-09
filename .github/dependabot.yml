@@ -1,0 +1,36 @@
+# Weekly and grouped on purpose. Daily ungrouped updates on a pre-MVP
+# repository generate noise that trains maintainers to ignore Dependabot,
+# which is worse than not running it.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    labels: ["type: infrastructure", "area: devops"]
+    commit-message: { prefix: "build", include: scope }
+    groups:
+      python-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: "/frontend"
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    labels: ["type: infrastructure", "area: frontend"]
+    commit-message: { prefix: "build", include: scope }
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: { interval: weekly, day: monday }
+    labels: ["type: infrastructure", "area: devops"]
+    commit-message: { prefix: "ci" }
+
+  - package-ecosystem: docker
+    directory: "/infra/docker"
+    schedule: { interval: weekly, day: monday }
+    labels: ["type: infrastructure", "area: devops"]
+    commit-message: { prefix: "build" }

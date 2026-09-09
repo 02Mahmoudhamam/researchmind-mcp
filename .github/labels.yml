@@ -1,0 +1,75 @@
+# Label taxonomy. Apply with:
+#   gh label create "<name>" --color <hex> --description "<desc>" --force
+# or in bulk via scripts/apply-labels.sh
+#
+# Twenty labels, deliberately. Milestones M0-M10 use GitHub's native Milestones
+# feature rather than labels — milestones have due dates, progress and issue
+# rollup that labels do not.
+
+# --- type: what kind of work -----------------------------------------------
+- name: "type: feature"
+  color: "0E8A16"
+  description: New capability
+- name: "type: bug"
+  color: "D73A4A"
+  description: Something behaves incorrectly
+- name: "type: refactor"
+  color: "FBCA04"
+  description: Restructuring with no behaviour change
+- name: "type: security"
+  color: "B60205"
+  description: Security-relevant change or finding
+- name: "type: documentation"
+  color: "0075CA"
+  description: Documentation and ADRs
+- name: "type: infrastructure"
+  color: "5319E7"
+  description: Build, CI, Docker, dependencies
+
+# --- area: which part of the system ----------------------------------------
+- name: "area: backend"
+  color: "1D76DB"
+  description: Service core, API, workers
+- name: "area: frontend"
+  color: "1D76DB"
+  description: Next.js web client
+- name: "area: database"
+  color: "1D76DB"
+  description: PostgreSQL, migrations, repositories
+- name: "area: rag"
+  color: "1D76DB"
+  description: Ingestion, chunking, embeddings, retrieval
+- name: "area: mcp"
+  color: "1D76DB"
+  description: MCP server, tools, resources, prompts
+- name: "area: auth"
+  color: "1D76DB"
+  description: Authentication, authorisation, tenant isolation
+- name: "area: devops"
+  color: "1D76DB"
+  description: Docker, CI/CD, deployment
+
+# --- priority --------------------------------------------------------------
+- name: "priority: critical"
+  color: "B60205"
+  description: Blocks the milestone or is a live security issue
+- name: "priority: high"
+  color: "D93F0B"
+  description: Needed for the current milestone
+- name: "priority: medium"
+  color: "FBCA04"
+  description: Planned, not urgent
+- name: "priority: low"
+  color: "C2E0C6"
+  description: Nice to have
+
+# --- status ----------------------------------------------------------------
+- name: "status: ready"
+  color: "0E8A16"
+  description: Prerequisites met, can be started
+- name: "status: in-progress"
+  color: "FBCA04"
+  description: Actively being worked on
+- name: "status: blocked"
+  color: "D73A4A"
+  description: Waiting on another issue or an external decision

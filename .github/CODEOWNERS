@@ -1,0 +1,12 @@
+# Default owner for everything.
+*                       @02Mahmoudhamam
+
+# Security-sensitive and architecture-defining paths. Listed explicitly so that
+# changes here are always visible in review, and so the intent survives the
+# arrival of additional collaborators.
+/backend/security/      @02Mahmoudhamam
+/docs/adr/              @02Mahmoudhamam
+/docs/security/         @02Mahmoudhamam
+/.github/               @02Mahmoudhamam
+/infra/                 @02Mahmoudhamam
+/SECURITY.md            @02Mahmoudhamam

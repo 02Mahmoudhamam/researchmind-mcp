@@ -1,0 +1,10 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/02Mahmoudhamam/researchmind-mcp/security/advisories/new
+    about: >-
+      Report privately, never as a public issue. If you found an exposed
+      credential, rotate it FIRST and never paste the value into a report.
+  - name: 📖 Documentation
+    url: https://github.com/02Mahmoudhamam/researchmind-mcp/tree/main/docs
+    about: Architecture, ADRs, roadmap, development workflow and security principles.
