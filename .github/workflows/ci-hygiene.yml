@@ -1,0 +1,57 @@
+# Repository hygiene — ENFORCED. These checks pass today and must keep passing.
+#
+# Deliberately scoped to properties that are true of the repository regardless
+# of how much of the application is implemented, so this workflow is green from
+# the first commit and stays green through every milestone.
+name: Repository Hygiene
+
+on:
+  push:
+    branches: [main, "milestone/**", "sprint/**"]
+  pull_request:
+    branches: [main, "milestone/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hygiene:
+    name: Hygiene checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Repository hygiene
+        run: ./scripts/check-hygiene.sh
+
+      - name: Secret scan (gitleaks)
+        run: |
+          # Installed from the release binary rather than the marketplace
+          # action, which is licence-gated for organisations.
+          VERSION=8.18.4
+          curl -sSfL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks detect --source . --redact --verbose --no-banner
+
+      - name: Assert mcp resolves to the SDK, not this repository
+        run: |
+          # ADR-0002. The local mcp/ package shadows the mcp SDK on sys.path,
+          # making the entire MCP layer unimportable. Sprint M0/S0.2 renames it
+          # to mcp_server/. Until then this check reports the collision without
+          # failing the build; the `if` flips to an exit 1 at M0.
+          if [ -d mcp ] && [ ! -d mcp_server ]; then
+            echo "::warning::mcp/ still shadows the mcp SDK — pending Sprint M0/S0.2 (ADR-0002)"
+          else
+            python3 - <<'PY'
+          import importlib.util, sys
+          spec = importlib.util.find_spec("mcp")
+          origin = spec.origin if spec else ""
+          if "site-packages" not in (origin or ""):
+              sys.exit(f"mcp resolves to {origin!r}, not the installed SDK")
+          print(f"OK: mcp resolves to {origin}")
+          PY
+          fi

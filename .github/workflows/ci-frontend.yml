@@ -1,0 +1,44 @@
+# Frontend CI — SCAFFOLDED, NOT YET ENFORCED.
+#
+# Trigger is workflow_dispatch only. The frontend cannot build at the current
+# baseline: next.config.js, tailwind.config.js and postcss.config.js do not
+# exist, and there is no lockfile for `npm ci`.
+#
+# PROMOTION: flip `on:` to push/pull_request at the end of Sprint M0/S0.1,
+# once the configuration files and package-lock.json are committed.
+name: Frontend CI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: frontend
+
+jobs:
+  frontend:
+    name: Lint, type-check and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run type-check
+
+      - name: Build
+        run: npm run build

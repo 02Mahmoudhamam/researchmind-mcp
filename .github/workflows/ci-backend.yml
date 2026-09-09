@@ -1,0 +1,62 @@
+# Backend CI — SCAFFOLDED, NOT YET ENFORCED.
+#
+# Trigger is workflow_dispatch only, on purpose. At the current baseline every
+# step below fails: `poetry check` rejects pyproject.toml, dependencies cannot
+# install, pytest cannot collect, and mypy --strict would fail on ~92 stubs
+# that declare non-Optional returns and return None.
+#
+# Committing this on push/pull_request would create a permanently red pipeline,
+# which trains everyone to ignore CI.
+#
+# PROMOTION SCHEDULE — flip `on:` to push/pull_request as each becomes true:
+#   Sprint M0/S0.1  poetry check, poetry install, pytest
+#   Milestone M0    ruff, black --check
+#   Milestone M2    mypy --strict
+name: Backend CI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  backend:
+    name: Lint, type-check and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Cache virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('poetry.lock') }}
+
+      - name: Validate pyproject
+        run: poetry check
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      - name: Lint (ruff)
+        run: poetry run ruff check .
+
+      - name: Format check (black)
+        run: poetry run black --check .
+
+      - name: Type check (mypy --strict)
+        run: poetry run mypy .
+
+      - name: Tests
+        run: poetry run pytest -v
