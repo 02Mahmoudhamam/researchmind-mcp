@@ -1,0 +1,1 @@
+"""ResearchMind MCP Backend."""

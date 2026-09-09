@@ -1,0 +1,43 @@
+[tool.poetry]
+name = "researchmind-mcp"
+version = "0.1.0"
+description = "AI Research Assistant based on Model Context Protocol"
+authors = ["ResearchMind Team"]
+python = "^3.11"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.111.0"
+uvicorn = "^0.30.0"
+mcp = "^1.0.0"
+anthropic = "^0.30.0"
+pydantic = "^2.7.0"
+pydantic-settings = "^2.3.0"
+qdrant-client = "^1.10.0"
+redis = "^5.0.0"
+pymupdf = "^1.24.0"
+langchain-text-splitters = "^0.2.0"
+python-jose = "^3.3.0"
+passlib = "^1.7.4"
+python-multipart = "^0.0.9"
+structlog = "^24.2.0"
+httpx = "^0.27.0"
+
+[tool.poetry.dev-dependencies]
+pytest = "^8.2.0"
+pytest-asyncio = "^0.23.0"
+black = "^24.4.0"
+ruff = "^0.4.0"
+mypy = "^1.10.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true

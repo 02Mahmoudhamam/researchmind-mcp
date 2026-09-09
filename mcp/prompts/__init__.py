@@ -1,0 +1,1 @@
+"""Reusable MCP prompt templates."""
