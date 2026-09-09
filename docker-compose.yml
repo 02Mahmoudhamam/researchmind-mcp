@@ -4,7 +4,7 @@ services:
   backend:
     build:
       context: .
-      dockerfile: devops/docker/Dockerfile.backend
+      dockerfile: infra/docker/Dockerfile.backend
     ports:
       - "8000:8000"
     env_file: .env
@@ -17,7 +17,7 @@ services:
   mcp-server:
     build:
       context: .
-      dockerfile: devops/docker/Dockerfile.mcp
+      dockerfile: infra/docker/Dockerfile.mcp
     env_file: .env
     depends_on:
       - backend
@@ -25,7 +25,7 @@ services:
   frontend:
     build:
       context: .
-      dockerfile: devops/docker/Dockerfile.frontend
+      dockerfile: infra/docker/Dockerfile.frontend
     ports:
       - "3000:3000"
     environment:
