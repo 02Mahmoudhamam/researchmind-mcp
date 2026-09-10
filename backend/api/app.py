@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend.config.settings import get_settings
-from backend.api.routers import documents, agents, search, auth, workspace
+from backend.api.routers import documents, agents, search, auth, workspace, health
 
 settings = get_settings()
 
@@ -20,6 +20,11 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Mounted at the root, without a version prefix: liveness and readiness are
+    # probed by infrastructure (containers, load balancers, orchestrators), not
+    # by API clients, so they must not move when the API is versioned.
+    app.include_router(health.router, tags=["health"])
 
     app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
     app.include_router(documents.router, prefix="/api/v1/documents", tags=["documents"])
