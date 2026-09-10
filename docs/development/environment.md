@@ -124,10 +124,10 @@ Documented so the configuration surface is predictable. **Not yet present in
 | `CORS_ALLOWED_ORIGINS` | M2 | Replaces the wildcard | — |
 | `RATE_LIMIT_*` | M9 | Rate limiting | — |
 
-> `MCP_SERVER_HOST` and `MCP_SERVER_PORT` are **removed** at M0. The MCP server
-> uses stdio transport and never binds a port; dead configuration that
-> contradicts the code is worse than absent configuration. See
-> [ADR-0002](../adr/0002-rest-and-mcp-as-sibling-adapters.md).
+> `MCP_SERVER_HOST` and `MCP_SERVER_PORT` **were removed in Sprint M0/S0.2**.
+> The MCP server uses stdio transport and never binds a port; dead
+> configuration that contradicts the code is worse than absent configuration.
+> See [ADR-0002](../adr/0002-rest-and-mcp-as-sibling-adapters.md).
 
 ## Secret handling
 
