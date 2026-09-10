@@ -5,7 +5,7 @@ breakdowns, acceptance criteria and definitions of done are in
 [COMPLETION_PLAN.md](COMPLETION_PLAN.md).
 
 **M0 is a corrective refactor and precedes all feature work.** Code written
-against the current `mcp/` namespace, `Settings`, or build must be redone.
+against the pre-M0 `mcp/` namespace, `Settings`, or build must be redone.
 
 | # | Milestone | Outcome | Tag |
 |---|---|---|---|
