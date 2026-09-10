@@ -15,8 +15,12 @@ assert result.agent_name == "summarizer"
 ```
 
 This passes *because* the agent does nothing. It would pass identically against
-a stub that never calls an LLM — which is exactly what it was testing. Both
-were deleted rather than kept.
+a stub that never calls an LLM — which is exactly what it was testing. Worse, it
+blessed that behaviour: `run()` reports `success=True` with `result=None` and
+`tokens_used=0`, and the test gave that a green tick.
+
+Both were deleted in Sprint M0/S0.3. Agent testing returns with M5, against the
+agent that actually calls a model.
 
 ## Test levels
 
@@ -51,12 +55,47 @@ A static check asserts no unconditional `success=True` in `agents/`.
 to a chunk that was actually supplied. Zero retrieval must produce an explicit
 "no relevant sources" answer with **no LLM call made**.
 
+## Deferred behaviour: `xfail(strict=True)`
+
+Functionality a later milestone owns is pinned with a strict xfail, never
+deleted and never silenced:
+
+```python
+@pytest.mark.xfail(
+    strict=True,
+    reason="TextChunker.chunk() is a stub returning None. Implemented in "
+           "Milestone M3 (Document Ingestion); see ADR-0007.",
+)
+```
+
+Every xfail must be `strict=True`, carry a precise reason, and name the owning
+milestone. Strict matters: when the functionality lands, the test XPASSes and
+pytest reports that as a **failure**, so the placeholder is forced to become a
+real regression test. A non-strict xfail would go quietly green, which is how
+deferred work gets forgotten.
+
+Currently pinned:
+
+| Test | Owner |
+|---|---|
+| `test_chunker_produces_chunks_covering_the_document` | M3 |
+| `test_readiness_reports_dependency_status` | M9 |
+
 ## Commands
 
-Test commands are documented here as each milestone establishes them. At the
-repository baseline the suite does not run — collection fails on missing
-dependencies, and one test fails by construction against an unimplemented
-chunker. Sprint M0/S0.1 is what makes `pytest` collect cleanly.
+```bash
+poetry run pytest          # full suite
+poetry run pytest -q       # quiet
+```
+
+Current state as of Sprint M0/S0.3: **3 passed, 2 xfailed, 0 failed**, with no
+collection errors. Deterministic — `tests/conftest.py` supplies settings, so the
+suite does not depend on a developer's `.env`.
+
+> On a machine with ROS 2 sourced, `PYTHONPATH` leaks `/opt/ros/*/site-packages`
+> into the virtualenv and pytest autoloads ROS plugins that fail on a missing
+> `lark`. Run `env -u PYTHONPATH poetry run pytest`. This is a workstation
+> issue, not a repository one; CI is unaffected.
 
 ## Definition of Done
 
