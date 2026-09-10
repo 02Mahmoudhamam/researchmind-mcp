@@ -76,7 +76,7 @@ the `pydantic[email]` extra (M0/S0.1); before that, `shared/models/user.py` and
 |---|---|---|
 | Backend API | `python main.py` → Uvicorn on `APP_PORT` (8000) | [main.py](main.py) |
 | FastAPI app object | `backend.api.app:app` | [backend/api/app.py](backend/api/app.py) |
-| MCP server (stdio) | `python -m mcp.server.server` | [mcp/server/server.py](mcp/server/server.py) |
+| MCP server (stdio) | `python -m mcp_server.server.server` | [mcp_server/server/server.py](mcp_server/server/server.py) |
 | Frontend | `npm run dev` in `frontend/` | [frontend/package.json](frontend/package.json) |
 | All services | `docker-compose up -d` — **currently broken, see below** | [docker-compose.yml](docker-compose.yml) |
 
@@ -89,8 +89,9 @@ Routes are mounted under `/api/v1/{auth,documents,agents,search,workspace}`.
 1. ~~**`poetry check` fails**~~ — **RESOLVED in M0/S0.1.** The invalid `python` key was
    removed from `[tool.poetry]`; `poetry check` now returns "All set!", `package-mode = false`
    is declared, and a `poetry.lock` is committed.
-2. **`import mcp` resolves to this repo's `mcp/` directory**, shadowing the SDK.
-   Verified: `mcp.server` has no `Server` attribute. The MCP server cannot import.
+2. ~~**`import mcp` resolves to this repo's `mcp/` directory**~~ — **RESOLVED in M0/S0.2.**
+   The package was renamed to `mcp_server/`; `import mcp` now resolves to the SDK (1.12.4)
+   and every `mcp_server` module imports.
 3. **Frontend build breaks** — `Dockerfile.frontend` copies `.next/standalone`, which needs
    `output: 'standalone'` in a `next.config.js` that does not exist. `tailwind.config.js`
    and `postcss.config.js` are also missing, so Tailwind never compiles.
@@ -122,12 +123,12 @@ stub returns the right type). There is **no RAG evaluation of any kind**.
 | Vector store | [vector_db/qdrant/](vector_db/qdrant/) | Client + config complete; repository all stubs |
 | Memory | [memory_system/redis/](memory_system/redis/) | Client + config complete; store stubbed **and orphaned** |
 | Agents (×9) | [agents/](agents/) | Identical templates; prompts + configs complete, `run()` is a stub |
-| MCP tools/resources/prompts | [mcp/](mcp/) | Schemas declared; only `list_tools` and `summarization_prompt` implemented |
+| MCP tools/resources/prompts | [mcp_server/](mcp_server/) | Importable since M0/S0.2; `list_tools` returns all 7 schemas. Handlers still stubs (M6) |
 | Logging | [shared/utils/logger.py](shared/utils/logger.py) | Complete, invoked — but `get_logger()` is never called |
 | Health/metrics | [devops/monitoring/health.py](devops/monitoring/health.py) | **Router never mounted** |
 
 ### Orphaned code — defined, zero references anywhere
-`RedisMemoryStore`, `ResearchMindMCPClient`, `require_role`, the health router,
+`RedisMemoryStore`, `require_role`, the health router,
 `devops/logging/logging_config.py` (duplicate of `shared/utils/logger.py`), and **8 of the
 9 agents** (only `OrchestratorAgent` is ever instantiated).
 
@@ -197,14 +198,14 @@ Qdrant will fail.
 
 ## Top blockers (P0 — full list in the audit)
 
-1. **`mcp/` shadows the `mcp` SDK** — rename to `mcp_integration/` or adopt a src-layout.
+1. ~~**`mcp/` shadows the `mcp` SDK**~~ — **RESOLVED in M0/S0.2.** Renamed to `mcp_server/`.
 2. ~~**`pyproject.toml:6`**~~ — **RESOLVED in M0/S0.1.**
 3. **No system of record** — blocks auth, documents, ownership and multi-tenancy together.
 4. **Auth fails open** — `HTTPBearer` rejects a *missing* header (so it looks correct), but
    `get_current_user` verifies nothing: any non-empty Bearer string is accepted.
 5. **Embedding provider unresolved** — OpenAI default in an Anthropic-only project.
-6. **Transport contradiction** — stdio server code vs. `MCP_SERVER_PORT=8001` and a compose
-   container with no stdin and no ports. Must be decided before downstream work.
+6. ~~**Transport contradiction**~~ — **RESOLVED in M0/S0.2.** ADR-0002 settled on stdio; the
+   `mcp-server` container, `Dockerfile.mcp` and `MCP_SERVER_HOST`/`PORT` are removed.
 7. ~~**No `LICENSE`**, no `.gitignore`, no `.dockerignore`~~ — **RESOLVED in the Repository
    Foundation phase (v0.0.1).** All three are committed.
 

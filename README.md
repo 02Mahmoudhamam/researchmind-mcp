@@ -119,7 +119,7 @@ Embeddings run **locally**, so a full stack needs exactly one secret:
 | Path | Contents |
 |---|---|
 | `backend/` | REST adapter (`api/`) and the **Service Core** (`services/`), config, security |
-| `mcp/` | MCP adapter — server, tools, resources, prompts *(renamed to `mcp_server/` at M0)* |
+| `mcp_server/` | MCP adapter — server, tools, resources, prompts. Importable; handlers stubbed until M6 |
 | `agents/` | Agent layer *(collapsed to a single `ResearchAgent` at M5)* |
 | `shared/` | Domain models, interfaces (ABCs), utilities — the layer everything depends on |
 | `document_processing/` | RAG ingestion: parse → chunk → embed |
@@ -155,7 +155,7 @@ Embeddings run **locally**, so a full stack needs exactly one secret:
 |---|---|
 | **All 12 REST endpoints** | ❌ Signatures only — every body is `...` |
 | **Authentication** | ❌ **Fails open.** Any non-empty bearer token is accepted |
-| **MCP layer** | ❌ Cannot be imported — local `mcp/` shadows the SDK |
+| **MCP layer** | ⚠️ Imports correctly and lists its 7 tools; no tool handler is implemented yet (M6) |
 | **RAG pipeline** | ❌ 1 of 17 stages implemented |
 | **Persistence** | ❌ No relational database exists |
 | **Agents** | ❌ Return `success=True` without calling an LLM |

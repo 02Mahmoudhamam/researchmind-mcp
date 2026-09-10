@@ -20,10 +20,6 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str
     CLAUDE_MODEL: str = "claude-sonnet-4-20250514"
 
-    # MCP
-    MCP_SERVER_HOST: str = "localhost"
-    MCP_SERVER_PORT: int = 8001
-
     # Qdrant
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333

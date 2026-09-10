@@ -14,14 +14,6 @@ services:
     volumes:
       - ./uploads:/app/uploads
 
-  mcp-server:
-    build:
-      context: .
-      dockerfile: infra/docker/Dockerfile.mcp
-    env_file: .env
-    depends_on:
-      - backend
-
   frontend:
     build:
       context: .

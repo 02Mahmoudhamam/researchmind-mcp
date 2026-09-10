@@ -1,5 +1,5 @@
 """MCP Tool definitions and handlers."""
-from mcp.tools import (
+from mcp_server.tools import (
     summarize_paper as summarize_paper_tool,
     extract_citations as extract_citations_tool,
     compare_papers as compare_papers_tool,

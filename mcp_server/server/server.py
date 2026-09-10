@@ -2,7 +2,7 @@
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, Resource, Prompt
-from mcp.tools import (
+from mcp_server.tools import (
     summarize_paper_tool,
     extract_citations_tool,
     compare_papers_tool,
@@ -11,14 +11,14 @@ from mcp.tools import (
     detect_research_gaps_tool,
     generate_research_questions_tool,
 )
-from mcp.resources import (
+from mcp_server.resources import (
     pdf_resource,
     paper_resource,
     notes_resource,
     metadata_resource,
     knowledge_graph_resource,
 )
-from mcp.prompts import (
+from mcp_server.prompts import (
     summarization_prompt,
     scientific_reviewer_prompt,
     citation_extraction_prompt,
