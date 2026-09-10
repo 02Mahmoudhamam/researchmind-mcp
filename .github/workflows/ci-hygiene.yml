@@ -37,21 +37,30 @@ jobs:
           tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
           /tmp/gitleaks detect --source . --redact --verbose --no-banner
 
-      - name: Assert mcp resolves to the SDK, not this repository
+      - name: Assert no package shadows the mcp SDK
         run: |
-          # ADR-0002. The local mcp/ package shadows the mcp SDK on sys.path,
-          # making the entire MCP layer unimportable. Sprint M0/S0.2 renames it
-          # to mcp_server/. Until then this check reports the collision without
-          # failing the build; the `if` flips to an exit 1 at M0.
-          if [ -d mcp ] && [ ! -d mcp_server ]; then
-            echo "::warning::mcp/ still shadows the mcp SDK — pending Sprint M0/S0.2 (ADR-0002)"
-          else
-            python3 - <<'PY'
-          import importlib.util, sys
-          spec = importlib.util.find_spec("mcp")
-          origin = spec.origin if spec else ""
-          if "site-packages" not in (origin or ""):
-              sys.exit(f"mcp resolves to {origin!r}, not the installed SDK")
-          print(f"OK: mcp resolves to {origin}")
-          PY
+          # ADR-0002. A repository-local package named `mcp` sits ahead of
+          # site-packages on sys.path and shadows the MCP SDK, which made the
+          # entire MCP layer unimportable before Sprint M0/S0.2. This guard
+          # exists so that collision can never be reintroduced.
+          #
+          # Deliberately dependency-free: this job installs nothing, so it
+          # asserts the repository invariant (no top-level `mcp/`) rather than
+          # runtime resolution. The runtime assertion — that `import mcp` lands
+          # in site-packages — belongs in Backend CI, where dependencies are
+          # installed, and is added when that workflow is promoted in S0.5.
+          fail=0
+          if [ -d mcp ]; then
+            echo "::error::a top-level mcp/ directory shadows the MCP SDK (ADR-0002)"
+            fail=1
           fi
+          if [ ! -d mcp_server ]; then
+            echo "::error::mcp_server/ is missing — the project MCP package should live there"
+            fail=1
+          fi
+          if git grep -nE '^\s*from mcp\.(tools|resources|prompts)' -- '*.py' > /dev/null 2>&1; then
+            echo "::error::stale project-local import of mcp.{tools,resources,prompts}; use mcp_server.*"
+            git grep -nE '^\s*from mcp\.(tools|resources|prompts)' -- '*.py'
+            fail=1
+          fi
+          [ "$fail" -eq 0 ] && echo "OK: no package shadows the mcp SDK" || exit 1
