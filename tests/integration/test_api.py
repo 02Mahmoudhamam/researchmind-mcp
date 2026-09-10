@@ -4,6 +4,8 @@ These run against the real application object: routing, middleware and
 response handling all execute. Nothing here is mocked, and no socket is opened.
 """
 
+import pytest
+
 
 async def test_health_endpoint_reports_liveness(api_client):
     """GET /health is reachable and reports the service is alive.
@@ -39,3 +41,27 @@ async def test_health_is_not_under_the_api_version_prefix(api_client):
     """
     assert (await api_client.get("/health")).status_code == 200
     assert (await api_client.get("/api/v1/health")).status_code == 404
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "/health/ready reports ready unconditionally without probing Qdrant, "
+        "Redis or the Claude API. Real dependency checks land in Milestone M9 "
+        "(Hardening & Observability)."
+    ),
+)
+async def test_readiness_reports_dependency_status(api_client):
+    """Readiness must describe what it actually checked.
+
+    Mounted in this sprint alongside liveness, but its handler returns a fixed
+    {"status": "ready", "dependencies": {}}. An orchestrator would read that as
+    healthy while every backing service was down. Pinned strict so M9 cannot
+    consider readiness finished while the payload is still empty.
+    """
+    response = await api_client.get("/health/ready")
+
+    assert response.status_code == 200
+    assert response.json()["dependencies"], (
+        "readiness must report the status of each checked dependency"
+    )
