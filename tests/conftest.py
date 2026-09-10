@@ -49,3 +49,24 @@ def _reset_settings_cache():
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+@pytest.fixture
+async def api_client():
+    """An httpx client bound directly to the ASGI application.
+
+    Uses ``ASGITransport`` rather than the ``AsyncClient(app=...)`` shortcut,
+    which httpx deprecated in 0.27 and removed in 0.28. Requests are dispatched
+    in-process against the real application — routing, middleware, dependency
+    injection and response validation all execute — so no socket is opened and
+    no network is required. That keeps API tests deterministic and makes them
+    exercise the application rather than a stand-in for it.
+    """
+    from httpx import ASGITransport, AsyncClient
+
+    from backend.api.app import app
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        yield client
