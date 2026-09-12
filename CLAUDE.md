@@ -117,7 +117,8 @@ stub returns the right type). There is **no RAG evaluation of any kind**.
 | Area | Path | State |
 |---|---|---|
 | Domain models | [shared/models/](shared/models/) | **Complete** — best asset in the repo |
-| Interfaces (ABCs) | [shared/interfaces/](shared/interfaces/) | **Complete** — `BaseAgent`, `BaseVectorStore`, `BaseMemoryStore`, `BaseRepository` |
+| Interfaces (ABCs) | [shared/interfaces/](shared/interfaces/) | **Complete** — `BaseAgent`, `BaseVectorStore`, `BaseMemoryStore`. `BaseRepository` is **deliberately unimplemented**: its ID-only signatures cannot satisfy the ownership invariant (M1/S1.3) |
+| Repositories | [backend/db/repositories/](backend/db/repositories/) | **Complete (M1/S1.3)** — user, document, chunk; ownership in the SQL, not in a Python check |
 | Settings | [backend/config/settings.py](backend/config/settings.py) | **Complete** (insecure secret defaults); validates `DATABASE_URL` uses the asyncpg driver |
 | DB infrastructure | [backend/db/](backend/db/) | **Complete (M1/S1.1)** — `Base` + naming convention, lazy async engine, session factory. **No models, no migrations** |
 | API routers | [backend/api/routers/](backend/api/routers/) | Signatures only, all bodies `TODO` |
@@ -158,15 +159,16 @@ Edges that **do not exist** despite being documented:
   so the retrieval and generation halves of the RAG system are not connected even in stubs.
 
 ### Missing components (findings, not blanks to fill)
-- **No repositories** — *narrowed by M1/S1.1 and M1/S1.2.* PostgreSQL 16 is a compose
+- **No service wiring** — *narrowed by M1/S1.1, S1.2 and S1.3.* PostgreSQL 16 is a compose
   service with a healthcheck, `DATABASE_URL` is a `Settings` field, `backend/db/` provides
   the declarative `Base`, a lazily-built async engine and a session factory, and
-  `backend/api/dependencies/database.py` yields `get_db_session`. **The schema now
-  exists:** `users`, `documents` and `document_chunks` are created by Alembic revision
-  `0001`, with ownership as foreign keys (`documents.user_id` RESTRICT,
-  `document_chunks.document_id` CASCADE). What is still missing is the data-access layer —
-  `BaseRepository` has no implementations, so nothing reads or writes these tables yet.
-  Repositories are **S1.3**; `DocumentService` wiring is **S1.4**.
+  `backend/api/dependencies/database.py` yields `get_db_session`. The schema exists —
+  `users`, `documents` and `document_chunks` from Alembic revision `0001`, ownership as
+  foreign keys (`documents.user_id` RESTRICT, `document_chunks.document_id` CASCADE) — and
+  `backend/db/repositories/` now reads and writes it, with `user_id` a required parameter
+  on every method that can reach an owned row **and present in the SQL predicate**. What is
+  still missing is the layer above: `backend/services/*` bodies are still `...`, so no
+  route persists anything. `DocumentService` wiring is **S1.4**; auth is **M2**.
 - **No task queue.** Ingest runs inline in the request handler.
 - **No reranker, no hybrid/BM25 search, no query expansion.**
 
@@ -219,9 +221,10 @@ Qdrant will fail.
 
 1. ~~**`mcp/` shadows the `mcp` SDK**~~ — **RESOLVED in M0/S0.2.** Renamed to `mcp_server/`.
 2. ~~**`pyproject.toml:6`**~~ — **RESOLVED in M0/S0.1.**
-3. **No system of record** — *mostly addressed.* The connection (M1/S1.1) and the schema
-   (M1/S1.2) both exist; ownership is now a database constraint rather than a convention.
-   Still blocks auth, documents and multi-tenancy until repositories land in S1.3.
+3. ~~**No system of record**~~ — **RESOLVED across M1/S1.1–S1.3.** Connection, schema and
+   ownership-scoped data access all exist; ownership is a database constraint *and* a query
+   predicate. What remains is wiring services to it (S1.4) and binding tokens to persisted
+   users (M2).
 4. **Auth fails open** — `HTTPBearer` rejects a *missing* header (so it looks correct), but
    `get_current_user` verifies nothing: any non-empty Bearer string is accepted.
 5. **Embedding provider unresolved** — OpenAI default in an Anthropic-only project.
