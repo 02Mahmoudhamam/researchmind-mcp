@@ -114,5 +114,23 @@ jobs:
           print(f"OK: import mcp -> {resolved}")
           PY
 
+      - name: Migrations apply, reverse and re-apply
+        env:
+          # Settings requires it and alembic/env.py reads Settings. A dummy
+          # value: nothing here calls Anthropic.
+          ANTHROPIC_API_KEY: ci-placeholder-not-a-real-key
+        run: |
+          # A separate step from the tests on purpose. The suite exercises the
+          # same cycle and then inspects pg_catalog, but running the CLI here
+          # means a broken migration is reported as a broken migration rather
+          # than as a test failure — and it still reports if collection breaks.
+          #
+          # A migration that cannot round-trip is not reviewable: there is no
+          # way to try it, back it out and try it again.
+          poetry run alembic upgrade head
+          poetry run alembic check
+          poetry run alembic downgrade base
+          poetry run alembic upgrade head
+
       - name: Tests
         run: poetry run pytest -v

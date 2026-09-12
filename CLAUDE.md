@@ -158,14 +158,15 @@ Edges that **do not exist** despite being documented:
   so the retrieval and generation halves of the RAG system are not connected even in stubs.
 
 ### Missing components (findings, not blanks to fill)
-- **No ORM models, migrations or repositories** — *narrowed by M1/S1.1.* PostgreSQL 16 is
-  now a compose service with a healthcheck, `DATABASE_URL` is a `Settings` field, and
-  `backend/db/` provides the declarative `Base`, a lazily-built async engine and a session
-  factory; `backend/api/dependencies/database.py` yields `get_db_session` alongside Qdrant
-  and Redis. **There is still no schema:** `Base.metadata.tables` is empty and asserted so
-  by test. `User` and `Document` therefore still have nowhere to persist and
-  `BaseRepository` still has no implementations — tables and the first migration are
-  **S1.2**, repositories **S1.3**.
+- **No repositories** — *narrowed by M1/S1.1 and M1/S1.2.* PostgreSQL 16 is a compose
+  service with a healthcheck, `DATABASE_URL` is a `Settings` field, `backend/db/` provides
+  the declarative `Base`, a lazily-built async engine and a session factory, and
+  `backend/api/dependencies/database.py` yields `get_db_session`. **The schema now
+  exists:** `users`, `documents` and `document_chunks` are created by Alembic revision
+  `0001`, with ownership as foreign keys (`documents.user_id` RESTRICT,
+  `document_chunks.document_id` CASCADE). What is still missing is the data-access layer —
+  `BaseRepository` has no implementations, so nothing reads or writes these tables yet.
+  Repositories are **S1.3**; `DocumentService` wiring is **S1.4**.
 - **No task queue.** Ingest runs inline in the request handler.
 - **No reranker, no hybrid/BM25 search, no query expansion.**
 
@@ -218,9 +219,9 @@ Qdrant will fail.
 
 1. ~~**`mcp/` shadows the `mcp` SDK**~~ — **RESOLVED in M0/S0.2.** Renamed to `mcp_server/`.
 2. ~~**`pyproject.toml:6`**~~ — **RESOLVED in M0/S0.1.**
-3. **No system of record** — *partially addressed.* The PostgreSQL connection exists as of
-   M1/S1.1, but nothing is stored yet: no tables, no repositories. Still blocks auth,
-   documents, ownership and multi-tenancy until S1.2–S1.3 land.
+3. **No system of record** — *mostly addressed.* The connection (M1/S1.1) and the schema
+   (M1/S1.2) both exist; ownership is now a database constraint rather than a convention.
+   Still blocks auth, documents and multi-tenancy until repositories land in S1.3.
 4. **Auth fails open** — `HTTPBearer` rejects a *missing* header (so it looks correct), but
    `get_current_user` verifies nothing: any non-empty Bearer string is accepted.
 5. **Embedding provider unresolved** — OpenAI default in an Anthropic-only project.

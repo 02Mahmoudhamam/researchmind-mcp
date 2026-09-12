@@ -21,6 +21,9 @@ asyncpg = "^0.31.0"
 # that names neither package — an implicit transitive dependency is the wrong
 # place for something load-bearing.
 greenlet = "^3.0.0"
+# A main dependency, not dev: `alembic upgrade head` runs as a deployment step
+# against production, so it must be present in the runtime image.
+alembic = "^1.13"
 qdrant-client = "^1.10.0"
 redis = "^5.0.0"
 pymupdf = "^1.24.0"

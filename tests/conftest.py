@@ -135,8 +135,7 @@ async def db_session() -> AsyncIterator[Any]:
 
     Each test runs inside a transaction that is rolled back on teardown, so
     tests never observe each other's writes and the suite needs no truncation
-    between them. S1.1 has no tables yet; this exists so S1.2 and S1.3 inherit
-    the isolation rather than inventing it.
+    between them. Pair it with ``migrated_schema`` when the test needs tables.
     """
     from backend.db.session import get_sessionmaker
 
@@ -181,3 +180,33 @@ async def engine_isolation() -> AsyncIterator[None]:
     finally:
         await dispose_engine()
         get_sessionmaker.cache_clear()
+
+
+@pytest.fixture(scope="session")
+def migrated_schema() -> None:
+    """Bring the test database up to head, once per session.
+
+    Uses `alembic upgrade head` rather than `Base.metadata.create_all()`. They
+    are not equivalent: create_all builds the schema the models describe, which
+    is exactly the schema the migration is supposed to produce and therefore
+    proves nothing about whether it does. Running the migration means the thing
+    under test is the thing that will run in production.
+
+    Opt in per module alongside the database marker:
+
+        pytestmark = [
+            pytest.mark.db,
+            pytest.mark.usefixtures("engine_isolation", "migrated_schema"),
+        ]
+    """
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"alembic upgrade head failed:\n{result.stderr}")
