@@ -50,6 +50,45 @@ These are tracked work items in
 [docs/roadmap/MILESTONES.md](docs/roadmap/MILESTONES.md), not undiscovered
 risks. Reports of *additional* issues are very welcome.
 
+## Known dependency advisories
+
+`npm audit` reports **5 advisories (1 critical, 4 high)** against the frontend:
+`next`, and `postcss` / `glob` / `eslint-config-next` / `@next/eslint-plugin-next`
+transitively. Every available fix is a **major** upgrade — `next` 14 → 16, which
+also pulls React 19 and ESLint 9 flat config. They are therefore **accepted, not
+yet fixed**, and this section exists so that is a decision on the record rather
+than an omission.
+
+**Why they are not currently reachable.** The advisories against `next` are
+concentrated in features this frontend does not use. Verified by inspection at
+Sprint M0/S0.5, all counts zero:
+
+| Advisory area | Used here? |
+|---|---|
+| Image Optimizer (incl. the AVIF RCE, `GHSA-2xp9-vwfh-vxw4`) | No `next/image` import, no `<Image>`, no `images` config, no `public/` |
+| Server Actions / Server Components DoS | No `"use server"`; all routes prerender static |
+| Middleware / proxy bypass, rewrites SSRF | No `middleware.ts`, no `rewrites`/`redirects` |
+| i18n Pages-Router bypass | No `i18n` config; App Router only |
+| CSP-nonce XSS, `beforeInteractive` XSS | No nonce use, no `beforeInteractive` scripts |
+| Windows-hosted RCE (`GHSA-p293-qw3h-jr36`, CVSS 9.0) | Image runs on `node:20-alpine` (Linux) |
+
+`postcss` and `glob` are **build-time** dependencies. They process this
+repository's own CSS and file globs during `npm run build`; they never see
+attacker-controlled input at runtime.
+
+**What would change this.** The moment the UI stops being placeholders — an
+image, a Server Action, middleware, a rewrite, or a real deployment — this
+analysis expires. Re-run it, do not inherit it.
+
+> This is a *reachability* argument, not a claim that the versions are safe. The
+> repository is pre-alpha and must not be exposed to an untrusted network
+> (see **Supported versions** above), which is what actually bounds the risk today.
+
+**Policy.** `.github/dependabot.yml` deliberately does **not** ignore `next`
+majors, so the upgrade PR stays visible and has to be decided on. React and the
+base-image majors *are* ignored, because those are pinned architectural
+decisions rather than dependency drift.
+
 ## Security model
 
 Invariants — fail-closed authentication, token-only identity, two-layer tenant

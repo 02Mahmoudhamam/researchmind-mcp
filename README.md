@@ -106,7 +106,7 @@ Rationale for every structural choice is in [docs/adr/](docs/adr/).
 | **Auth** | JWT (`python-jose`, algorithm pinned) · passlib/bcrypt |
 | **Frontend** | Next.js 14 (App Router) · React 18 · TypeScript · Tailwind · TanStack Query · Zustand · axios |
 | **Testing** | pytest · pytest-asyncio · testcontainers · httpx · gitleaks |
-| **Quality** | ruff · black · mypy (strict) |
+| **Quality** | ruff · black *(both enforced in CI)* · mypy strict *(runs; enforced from M2)* |
 | **Infrastructure** | Docker · Docker Compose · GitHub Actions · Dependabot |
 
 Embeddings run **locally**, so a full stack needs exactly one secret:
@@ -226,9 +226,16 @@ functional. Commands are not documented here before they work.
 ## Testing
 
 ```bash
-poetry run pytest                       # ⚠️ does not yet collect cleanly
-./scripts/check-hygiene.sh              # ✅ works today
+poetry run pytest                       # ✅ 3 passed, 2 xfailed
+poetry run ruff check .                 # ✅ enforced in CI
+poetry run black --check .              # ✅ enforced in CI
+poetry run mypy .                       # ⚠️ runs, but 149 errors — not enforced until M2
+./scripts/check-hygiene.sh              # ✅ enforced in CI
 ```
+
+The two `xfail`s are deliberate and `strict`: they pin behaviour that does not
+exist yet (chunking, M3; readiness probing, M9) and will fail the build the day
+it starts working, rather than passing silently.
 
 Strategy, test levels and the blocking release-gate suites are in
 [docs/development/testing.md](docs/development/testing.md).

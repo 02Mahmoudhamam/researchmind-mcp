@@ -194,9 +194,15 @@ Qdrant will fail.
 - **Typed config:** one `Settings` class, `@lru_cache()`d. Note `QdrantConfig`/`RedisConfig`
   bind `settings.X` as class-attribute defaults **at import time**, which freezes them and
   defeats per-test overrides.
-- **Tooling configured but never run:** `ruff` (line-length 88), `black`, `mypy` **strict**,
-  `pytest`. `mypy --strict` would fail today — ~99 stubs declare non-`Optional` returns and
-  return `None`.
+- **Tooling — enforced since M0/S0.5:** `ruff` (line-length 88) and `black` (same 88) both
+  pass and run on every push and PR via `.github/workflows/ci-backend.yml`, alongside
+  `poetry check`, `poetry check --lock`, a runtime `import mcp` assertion and `pytest`.
+  Frontend lint/type-check/build are enforced by `ci-frontend.yml`.
+  **`mypy --strict` is the exception** — configured and runnable (S0.5 fixed the
+  module-path defect that made it abort before checking anything), but **not enforced**:
+  it reports **149 errors in 66 files, 54 of them `empty-body`** — the stubs that declare
+  a non-`Optional` return and then `...`. Promoted at **M2**, per the schedule in that
+  workflow's header.
 
 ---
 
