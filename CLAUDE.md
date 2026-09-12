@@ -118,7 +118,8 @@ stub returns the right type). There is **no RAG evaluation of any kind**.
 |---|---|---|
 | Domain models | [shared/models/](shared/models/) | **Complete** — best asset in the repo |
 | Interfaces (ABCs) | [shared/interfaces/](shared/interfaces/) | **Complete** — `BaseAgent`, `BaseVectorStore`, `BaseMemoryStore`, `BaseRepository` |
-| Settings | [backend/config/settings.py](backend/config/settings.py) | **Complete** (insecure secret defaults) |
+| Settings | [backend/config/settings.py](backend/config/settings.py) | **Complete** (insecure secret defaults); validates `DATABASE_URL` uses the asyncpg driver |
+| DB infrastructure | [backend/db/](backend/db/) | **Complete (M1/S1.1)** — `Base` + naming convention, lazy async engine, session factory. **No models, no migrations** |
 | API routers | [backend/api/routers/](backend/api/routers/) | Signatures only, all bodies `TODO` |
 | API schemas | [backend/api/schemas/](backend/api/schemas/) | **Complete** |
 | Services | [backend/services/](backend/services/) | Stubs, except `AgentService.run()` |
@@ -157,9 +158,14 @@ Edges that **do not exist** despite being documented:
   so the retrieval and generation halves of the RAG system are not connected even in stubs.
 
 ### Missing components (findings, not blanks to fill)
-- **No relational DB / ORM / migrations.** `backend/api/dependencies/database.py` yields only
-  Qdrant and Redis. `User` and `Document` have nowhere to persist, so ownership checks have
-  nothing to query. `BaseRepository` has no implementations.
+- **No ORM models, migrations or repositories** — *narrowed by M1/S1.1.* PostgreSQL 16 is
+  now a compose service with a healthcheck, `DATABASE_URL` is a `Settings` field, and
+  `backend/db/` provides the declarative `Base`, a lazily-built async engine and a session
+  factory; `backend/api/dependencies/database.py` yields `get_db_session` alongside Qdrant
+  and Redis. **There is still no schema:** `Base.metadata.tables` is empty and asserted so
+  by test. `User` and `Document` therefore still have nowhere to persist and
+  `BaseRepository` still has no implementations — tables and the first migration are
+  **S1.2**, repositories **S1.3**.
 - **No task queue.** Ingest runs inline in the request handler.
 - **No reranker, no hybrid/BM25 search, no query expansion.**
 
@@ -193,7 +199,9 @@ Qdrant will fail.
 - **Interface-first:** define the ABC in `shared/interfaces/`, implement in the owning package.
 - **Typed config:** one `Settings` class, `@lru_cache()`d. Note `QdrantConfig`/`RedisConfig`
   bind `settings.X` as class-attribute defaults **at import time**, which freezes them and
-  defeats per-test overrides.
+  defeats per-test overrides. `backend/db/engine.py` deliberately does not follow that
+  pattern — it reads settings inside an `@lru_cache`d factory, so importing it neither
+  freezes configuration nor opens a connection pool (asserted by test in a subprocess).
 - **Tooling — enforced since M0/S0.5:** `ruff` (line-length 88) and `black` (same 88) both
   pass and run on every push and PR via `.github/workflows/ci-backend.yml`, alongside
   `poetry check`, `poetry check --lock`, a runtime `import mcp` assertion and `pytest`.
@@ -210,7 +218,9 @@ Qdrant will fail.
 
 1. ~~**`mcp/` shadows the `mcp` SDK**~~ — **RESOLVED in M0/S0.2.** Renamed to `mcp_server/`.
 2. ~~**`pyproject.toml:6`**~~ — **RESOLVED in M0/S0.1.**
-3. **No system of record** — blocks auth, documents, ownership and multi-tenancy together.
+3. **No system of record** — *partially addressed.* The PostgreSQL connection exists as of
+   M1/S1.1, but nothing is stored yet: no tables, no repositories. Still blocks auth,
+   documents, ownership and multi-tenancy until S1.2–S1.3 land.
 4. **Auth fails open** — `HTTPBearer` rejects a *missing* header (so it looks correct), but
    `get_current_user` verifies nothing: any non-empty Bearer string is accepted.
 5. **Embedding provider unresolved** — OpenAI default in an Anthropic-only project.
