@@ -102,6 +102,32 @@ class TestSessionFactory:
         assert get_sessionmaker().kw["expire_on_commit"] is False
 
 
+class TestSchemaOwnership:
+    def test_the_application_never_creates_schema_itself(self) -> None:
+        """Schema lifecycle belongs to Alembic, not to application startup.
+
+        `Base.metadata.create_all()` is the tempting shortcut: it makes tests
+        and local runs work without migrations, and it means the migration that
+        ships to production is the one thing nobody exercised. It also races
+        between replicas at boot.
+
+        Verified separately by running the app against an empty database: it
+        imports, completes its lifespan, and creates nothing.
+        """
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parents[2]
+        searched = [root / "main.py", *(root / "backend").rglob("*.py")]
+        offenders = [
+            str(path.relative_to(root))
+            for path in searched
+            if "create_all" in path.read_text(encoding="utf-8")
+            or "drop_all" in path.read_text(encoding="utf-8")
+        ]
+
+        assert not offenders, f"schema creation leaked into the app: {offenders}"
+
+
 class TestNamingConvention:
     def test_every_constraint_kind_is_named(self) -> None:
         """All five kinds must be templated before the first migration.
@@ -123,11 +149,3 @@ class TestNamingConvention:
         """
         assert "column_0_N_name" in NAMING_CONVENTION["ix"]
         assert "column_0_N_name" in NAMING_CONVENTION["uq"]
-
-    def test_no_tables_are_defined_yet(self) -> None:
-        """S1.1 is infrastructure only; schema arrives in S1.2.
-
-        Fails loudly if a model is added without the migration that should
-        accompany it.
-        """
-        assert Base.metadata.tables == {}
