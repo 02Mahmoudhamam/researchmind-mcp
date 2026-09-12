@@ -1,20 +1,24 @@
-# Backend CI — SCAFFOLDED, NOT YET ENFORCED.
+# Backend CI — ENFORCED since Sprint M0/S0.5.
 #
-# Trigger is workflow_dispatch only, on purpose. At the current baseline every
-# step below fails: `poetry check` rejects pyproject.toml, dependencies cannot
-# install, pytest cannot collect, and mypy --strict would fail on ~92 stubs
-# that declare non-Optional returns and return None.
+# Promotion history (the schedule this file used to carry):
+#   Sprint M0/S0.1  poetry check, poetry install, pytest   — now enforced
+#   Milestone M0    ruff, black --check                    — now enforced
+#   Milestone M2    mypy --strict                          — STILL DEFERRED
 #
-# Committing this on push/pull_request would create a permanently red pipeline,
-# which trains everyone to ignore CI.
-#
-# PROMOTION SCHEDULE — flip `on:` to push/pull_request as each becomes true:
-#   Sprint M0/S0.1  poetry check, poetry install, pytest
-#   Milestone M0    ruff, black --check
-#   Milestone M2    mypy --strict
+# mypy is deliberately absent below. It is configured and runnable (see
+# [tool.mypy] in pyproject.toml, whose module-path defect was fixed in S0.5), but
+# it reports 149 errors in 66 files, 54 of them `empty-body` — the ~99 stubs that
+# declare a non-Optional return and then `...`. Those are the unimplemented
+# system, not type bugs. Enforcing it now would mean a permanently red pipeline
+# or blanket ignores; both teach people to ignore CI. It is promoted at M2, when
+# auth is the first subsystem with real bodies to type-check.
 name: Backend CI
 
 on:
+  push:
+    branches: [main, "milestone/**", "sprint/**"]
+  pull_request:
+    branches: [main, "milestone/**"]
   workflow_dispatch:
 
 permissions:
@@ -22,10 +26,13 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.12"
+  # Without this Poetry builds the venv under ~/.cache/pypoetry, so the cache
+  # step below — which keys on .venv — would never hit.
+  POETRY_VIRTUALENVS_IN_PROJECT: "true"
 
 jobs:
   backend:
-    name: Lint, type-check and test
+    name: Lint, format, import and test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -46,6 +53,9 @@ jobs:
       - name: Validate pyproject
         run: poetry check
 
+      - name: Validate lockfile is in step with pyproject
+        run: poetry check --lock
+
       - name: Install dependencies
         run: poetry install --no-interaction
 
@@ -55,8 +65,22 @@ jobs:
       - name: Format check (black)
         run: poetry run black --check .
 
-      - name: Type check (mypy --strict)
-        run: poetry run mypy .
+      - name: Assert `import mcp` resolves to the SDK, not this repository
+        run: |
+          # ADR-0002, the runtime half of the guard in ci-hygiene.yml. That job
+          # installs nothing, so it can only assert the repository invariant (no
+          # top-level mcp/). This one has dependencies installed, so it asserts
+          # what actually broke before S0.2: that `import mcp` lands in the
+          # installed SDK rather than a repository-local package.
+          poetry run python - <<'PY'
+          import pathlib
+          import mcp
+
+          resolved = pathlib.Path(mcp.__file__).resolve()
+          if "site-packages" not in resolved.parts:
+              raise SystemExit(f"::error::import mcp resolved to {resolved}, not the installed SDK")
+          print(f"OK: import mcp -> {resolved}")
+          PY
 
       - name: Tests
         run: poetry run pytest -v

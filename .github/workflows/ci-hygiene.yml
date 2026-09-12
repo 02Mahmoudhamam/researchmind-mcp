@@ -47,8 +47,9 @@ jobs:
           # Deliberately dependency-free: this job installs nothing, so it
           # asserts the repository invariant (no top-level `mcp/`) rather than
           # runtime resolution. The runtime assertion — that `import mcp` lands
-          # in site-packages — belongs in Backend CI, where dependencies are
-          # installed, and is added when that workflow is promoted in S0.5.
+          # in site-packages — lives in Backend CI, where dependencies are
+          # installed; it was added there when that workflow was promoted in
+          # Sprint M0/S0.5.
           fail=0
           if [ -d mcp ]; then
             echo "::error::a top-level mcp/ directory shadows the MCP SDK (ADR-0002)"
