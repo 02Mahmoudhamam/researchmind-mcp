@@ -1,4 +1,5 @@
 """MCP Resource: pdf_resource"""
+
 from mcp.types import Resource
 
 

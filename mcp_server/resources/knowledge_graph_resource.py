@@ -1,4 +1,5 @@
 """MCP Resource: knowledge_graph_resource"""
+
 from mcp.types import Resource
 
 

@@ -1,4 +1,5 @@
 """Search request/response schemas."""
+
 from pydantic import BaseModel
 from typing import List, Optional
 from shared.models.document import SearchResult

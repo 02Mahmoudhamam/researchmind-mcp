@@ -1,4 +1,5 @@
 """Qdrant implementation of BaseVectorStore."""
+
 from shared.interfaces.vector_store import BaseVectorStore
 from shared.models.document import DocumentChunk, SearchResult
 from vector_db.qdrant.client import get_qdrant_client

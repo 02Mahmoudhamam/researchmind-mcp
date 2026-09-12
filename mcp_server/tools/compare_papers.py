@@ -1,4 +1,5 @@
 """MCP Tool: compare_papers"""
+
 from mcp.types import Tool, TextContent
 from pydantic import BaseModel
 from typing import List, Optional
@@ -6,6 +7,7 @@ from typing import List, Optional
 
 class Input(BaseModel):
     """Input schema for compare_papers tool."""
+
     document_ids: List[str]
     options: Optional[dict] = None
 

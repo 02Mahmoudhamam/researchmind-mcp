@@ -1,4 +1,5 @@
 """Structured logging configuration."""
+
 import structlog
 import logging
 from backend.config.settings import get_settings
@@ -12,9 +13,11 @@ def configure_logging() -> None:
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.stdlib.add_log_level,
             structlog.processors.StackInfoRenderer(),
-            structlog.processors.JSONRenderer()
-            if settings.LOG_FORMAT == "json"
-            else structlog.dev.ConsoleRenderer(),
+            (
+                structlog.processors.JSONRenderer()
+                if settings.LOG_FORMAT == "json"
+                else structlog.dev.ConsoleRenderer()
+            ),
         ],
         wrapper_class=structlog.stdlib.BoundLogger,
         context_class=dict,

@@ -1,4 +1,5 @@
 """Semantic search service."""
+
 from document_processing.embedder import EmbeddingGenerator
 from vector_db.qdrant.repository import QdrantVectorRepository
 from shared.models.document import SearchResult

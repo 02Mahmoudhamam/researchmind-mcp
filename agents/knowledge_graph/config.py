@@ -1,4 +1,5 @@
 """Configuration for knowledge_graph agent."""
+
 from shared.models.agent import AgentConfig
 
 knowledge_graph_config = AgentConfig(

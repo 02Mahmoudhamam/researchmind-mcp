@@ -1,4 +1,5 @@
 """Role-Based Access Control."""
+
 from shared.models.user import UserRole
 from typing import List
 
@@ -9,12 +10,17 @@ class RBACPolicy:
     PERMISSIONS: dict = {
         UserRole.ADMIN: ["*"],
         UserRole.RESEARCHER: [
-            "document:read", "document:write",
-            "agent:run", "search:query",
-            "workspace:read", "workspace:write",
+            "document:read",
+            "document:write",
+            "agent:run",
+            "search:query",
+            "workspace:read",
+            "workspace:write",
         ],
         UserRole.VIEWER: [
-            "document:read", "search:query", "workspace:read",
+            "document:read",
+            "search:query",
+            "workspace:read",
         ],
     }
 

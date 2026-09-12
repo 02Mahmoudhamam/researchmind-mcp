@@ -1,4 +1,5 @@
 """MCP Resource: paper_resource"""
+
 from mcp.types import Resource
 
 

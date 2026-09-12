@@ -1,4 +1,5 @@
 """Configuration for citation agent."""
+
 from shared.models.agent import AgentConfig
 
 citation_config = AgentConfig(

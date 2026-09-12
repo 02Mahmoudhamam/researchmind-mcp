@@ -1,4 +1,5 @@
 """Qdrant connection configuration."""
+
 from pydantic import BaseModel
 from backend.config.settings import get_settings
 

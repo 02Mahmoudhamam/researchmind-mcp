@@ -1,4 +1,5 @@
 """Semantic search endpoints."""
+
 from fastapi import APIRouter, Depends
 from backend.api.schemas.search import SearchRequest, SearchResponse
 from backend.services.search_service import SearchService

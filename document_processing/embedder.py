@@ -1,4 +1,5 @@
 """Embedding generation for document chunks."""
+
 from typing import List
 from shared.models.document import DocumentChunk
 

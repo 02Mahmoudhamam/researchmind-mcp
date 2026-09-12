@@ -1,4 +1,5 @@
 """Agent request/response schemas."""
+
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
 

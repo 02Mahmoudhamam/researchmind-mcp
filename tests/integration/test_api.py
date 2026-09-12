@@ -62,6 +62,6 @@ async def test_readiness_reports_dependency_status(api_client):
     response = await api_client.get("/health/ready")
 
     assert response.status_code == 200
-    assert response.json()["dependencies"], (
-        "readiness must report the status of each checked dependency"
-    )
+    assert response.json()[
+        "dependencies"
+    ], "readiness must report the status of each checked dependency"
