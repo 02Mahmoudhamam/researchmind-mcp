@@ -1,4 +1,5 @@
 """ResearchMind MCP — application entry point."""
+
 import uvicorn
 from backend.config.settings import get_settings
 from shared.utils.logger import configure_logging

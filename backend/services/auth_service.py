@@ -1,6 +1,6 @@
 """Authentication and user management service."""
+
 from backend.security.jwt_handler import JWTHandler
-from shared.models.user import User, UserRole
 from backend.api.schemas.auth import RegisterRequest, LoginRequest, LoginResponse
 
 

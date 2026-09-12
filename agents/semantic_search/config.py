@@ -1,4 +1,5 @@
 """Configuration for semantic_search agent."""
+
 from shared.models.agent import AgentConfig
 
 semantic_search_config = AgentConfig(

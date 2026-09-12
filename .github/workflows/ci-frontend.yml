@@ -1,14 +1,17 @@
-# Frontend CI — SCAFFOLDED, NOT YET ENFORCED.
+# Frontend CI — ENFORCED since Sprint M0/S0.5.
 #
-# Trigger is workflow_dispatch only. The frontend cannot build at the current
-# baseline: next.config.js, tailwind.config.js and postcss.config.js do not
-# exist, and there is no lockfile for `npm ci`.
-#
-# PROMOTION: flip `on:` to push/pull_request at the end of Sprint M0/S0.1,
-# once the configuration files and package-lock.json are committed.
+# Sprint M0/S0.4 supplied what this workflow needs: package-lock.json (so `npm ci`
+# succeeds at all), next.config.mjs, postcss.config.js, tailwind.config.ts and
+# .eslintrc.json (so `npm run lint` lints instead of opening a setup prompt).
+# All four steps below were verified green from a wiped node_modules before this
+# trigger was promoted.
 name: Frontend CI
 
 on:
+  push:
+    branches: [main, "milestone/**", "sprint/**"]
+  pull_request:
+    branches: [main, "milestone/**"]
   workflow_dispatch:
 
 permissions:
@@ -23,9 +26,9 @@ jobs:
     name: Lint, type-check and build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: npm

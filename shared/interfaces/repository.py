@@ -1,4 +1,5 @@
 """Base repository interface for data access layer."""
+
 from abc import ABC, abstractmethod
 from typing import Generic, TypeVar, Optional, List
 

@@ -1,4 +1,5 @@
 """Redis async client factory."""
+
 import redis.asyncio as aioredis
 from memory_system.redis.config import RedisConfig
 from functools import lru_cache

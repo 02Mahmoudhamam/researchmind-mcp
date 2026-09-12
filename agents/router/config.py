@@ -1,4 +1,5 @@
 """Configuration for router agent."""
+
 from shared.models.agent import AgentConfig
 
 router_config = AgentConfig(

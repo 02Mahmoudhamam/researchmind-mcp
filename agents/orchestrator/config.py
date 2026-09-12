@@ -1,4 +1,5 @@
 """Configuration for orchestrator agent."""
+
 from shared.models.agent import AgentConfig
 
 orchestrator_config = AgentConfig(

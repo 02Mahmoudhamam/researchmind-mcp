@@ -22,6 +22,24 @@ updates:
     groups:
       npm-minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # React 18 is the approved frontend runtime. A major bump here is a
+      # framework decision, not a dependency update, so it gets made
+      # deliberately rather than arriving as an automated PR.
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
+      # Type packages must track the runtime major they describe; @types/react 19
+      # against React 18 produces type errors, not an upgrade.
+      - dependency-name: "@types/react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      #
+      # `next` is deliberately NOT ignored. Its majors carry security fixes (see
+      # SECURITY.md), so those PRs must stay visible and be decided on rather
+      # than silently suppressed.
 
   - package-ecosystem: github-actions
     directory: "/"
@@ -34,3 +52,14 @@ updates:
     schedule: { interval: weekly, day: monday }
     labels: ["type: infrastructure", "area: devops"]
     commit-message: { prefix: "build" }
+    ignore:
+      # Base-image majors are pinned runtime decisions, not dependencies.
+      # python 3.12 is declared in pyproject.toml (`python = "^3.12"`), the
+      # poetry.lock is resolved against it, and [tool.ruff]/[tool.mypy] target
+      # py312. Node 20 matches actions/setup-node in ci-frontend.yml. Dependabot
+      # proposed python:3.14-slim and node:26-alpine, either of which would put
+      # the image out of step with the lockfile and CI in one unreviewed PR.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]

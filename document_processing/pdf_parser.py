@@ -1,6 +1,6 @@
 """PDF parsing using PyMuPDF."""
+
 from pathlib import Path
-from typing import Optional
 from shared.models.document import DocumentMetadata
 
 

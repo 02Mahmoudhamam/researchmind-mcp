@@ -1,4 +1,5 @@
 """Configuration for memory agent."""
+
 from shared.models.agent import AgentConfig
 
 memory_config = AgentConfig(

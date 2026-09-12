@@ -2,9 +2,9 @@
 Router Agent — service implementation.
 Role: route user requests to the correct specialized agent
 """
+
 from agents.router.interface import RouterAgentInterface
 from agents.router.config import router_config
-from agents.router.prompt import build_prompt
 from shared.models.agent import AgentInput, AgentOutput
 import time
 
@@ -19,8 +19,8 @@ class RouterAgent(RouterAgentInterface):
         """Execute the router task."""
         start = time.monotonic()
         try:
-            prompt = build_prompt(input.task, str(input.context))
-            # TODO: call Claude API via anthropic client
+            # TODO(M5): call Claude via the anthropic client with
+            # build_prompt(input.task, str(input.context)).
             result = None
             return AgentOutput(
                 agent_name=self.name,

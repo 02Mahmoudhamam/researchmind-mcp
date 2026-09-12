@@ -85,30 +85,40 @@ docker-compose.override.yml
 
 # --- Local service data volumes --------------------------------------------
 # Postgres, Qdrant and Redis state must never be committed.
-data/
-pgdata/
-postgres_data/
-qdrant_data/
-qdrant_storage/
-redis_data/
+#
+# Leading slashes are deliberate throughout this section and the two below. An
+# unanchored `foo/` matches a directory named foo at ANY depth, so it silently
+# swallows source that happens to share the name. That is not hypothetical here:
+# a bare `models/` excluded the whole of shared/models/ — the domain model layer
+# — from the repository, and it took promoting Backend CI in Sprint M0/S0.5 to
+# notice. These volumes only ever exist at the repository root, so say so.
+/data/
+/pgdata/
+/postgres_data/
+/qdrant_data/
+/qdrant_storage/
+/redis_data/
 dump.rdb
 *.db
 *.sqlite
 *.sqlite3
 
 # --- Application runtime artifacts -----------------------------------------
-uploads/
-storage/
-logs/
+# Root-anchored: see the note in the service-volumes section above.
+/uploads/
+/storage/
+/logs/
 *.log
-tmp/
-temp/
+/tmp/
+/temp/
 
 # --- ML / embedding model caches -------------------------------------------
 # FastEmbed (BAAI/bge-small-en-v1.5) downloads weights locally; they are baked
 # into the image at build time and must never enter version control.
 .fastembed_cache/
-models/
+# Root-anchored. `models/` unanchored matched shared/models/ and removed the
+# project's domain models from version control; see the note above.
+/models/
 *.onnx
 *.safetensors
 *.bin

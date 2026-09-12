@@ -1,4 +1,5 @@
 """MCP Resource: notes_resource"""
+
 from mcp.types import Resource
 
 

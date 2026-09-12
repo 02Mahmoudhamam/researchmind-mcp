@@ -1,4 +1,5 @@
 """Configuration for paper_comparison agent."""
+
 from shared.models.agent import AgentConfig
 
 paper_comparison_config = AgentConfig(

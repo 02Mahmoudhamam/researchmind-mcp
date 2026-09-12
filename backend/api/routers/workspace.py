@@ -1,4 +1,5 @@
 """Research workspace endpoints."""
+
 from fastapi import APIRouter, Depends
 from backend.security.api_security import get_current_user
 from shared.models.user import User

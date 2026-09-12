@@ -1,4 +1,5 @@
 """Configuration for research_gap agent."""
+
 from shared.models.agent import AgentConfig
 
 research_gap_config = AgentConfig(

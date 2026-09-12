@@ -5,8 +5,18 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential curl && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml poetry.lock* ./
-RUN pip install poetry && poetry install --only main --no-interaction
+# Poetry installs into a virtualenv by default. In a container that is exactly
+# wrong: the dependencies land in /root/.cache/pypoetry/virtualenvs/... while
+# CMD below runs /usr/local/bin/python, so the image builds successfully and
+# then dies at startup with `ModuleNotFoundError: No module named 'uvicorn'`.
+# The container IS the isolated environment.
+ENV POETRY_VIRTUALENVS_CREATE=false
+
+# poetry.lock without a glob: the `poetry.lock*` form silently succeeded when no
+# lockfile existed, resolving fresh versions at build time. A missing lockfile
+# must fail the build, not produce a differently-pinned image.
+COPY pyproject.toml poetry.lock ./
+RUN pip install --no-cache-dir poetry && poetry install --only main --no-interaction
 
 COPY . .
 

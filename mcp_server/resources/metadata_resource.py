@@ -1,4 +1,5 @@
 """MCP Resource: metadata_resource"""
+
 from mcp.types import Resource
 
 

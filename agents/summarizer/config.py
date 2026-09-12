@@ -1,4 +1,5 @@
 """Configuration for summarizer agent."""
+
 from shared.models.agent import AgentConfig
 
 summarizer_config = AgentConfig(

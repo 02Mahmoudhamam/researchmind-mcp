@@ -1,4 +1,5 @@
 """Database connection dependencies."""
+
 from vector_db.qdrant.client import get_qdrant_client
 from memory_system.redis.client import get_redis_client
 

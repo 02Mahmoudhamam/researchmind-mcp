@@ -1,4 +1,5 @@
 """Vector store interface."""
+
 from abc import ABC, abstractmethod
 from typing import List, Optional
 from shared.models.document import DocumentChunk, SearchResult

@@ -2,9 +2,9 @@
 Memory Agent — service implementation.
 Role: manage session memory and long-term context
 """
+
 from agents.memory.interface import MemoryAgentInterface
 from agents.memory.config import memory_config
-from agents.memory.prompt import build_prompt
 from shared.models.agent import AgentInput, AgentOutput
 import time
 
@@ -19,8 +19,8 @@ class MemoryAgent(MemoryAgentInterface):
         """Execute the memory task."""
         start = time.monotonic()
         try:
-            prompt = build_prompt(input.task, str(input.context))
-            # TODO: call Claude API via anthropic client
+            # TODO(M5): call Claude via the anthropic client with
+            # build_prompt(input.task, str(input.context)).
             result = None
             return AgentOutput(
                 agent_name=self.name,
