@@ -179,9 +179,10 @@ Roughly **10% complete** — concentrated in declarations rather than behaviour.
 ## Local Development
 
 > [!WARNING]
-> **No runnable workflow exists yet.** `docker compose up` fails: `poetry check`
-> rejects `pyproject.toml`, and the frontend has no `next.config.js`. Making
-> these commands work is **Milestone M0**, the next unit of work.
+> **The full stack is not runnable yet.** The *frontend* half now is: its image
+> builds and serves every route (Sprint M0/S0.4), and `poetry check` passes
+> (M0/S0.1). What remains unproven is the backend half of `docker compose up`
+> — finishing it is the rest of **Milestone M0**.
 
 ### What works today
 
@@ -195,10 +196,25 @@ cd frontend && cp .env.example .env.local && cd ..
 ./scripts/check-hygiene.sh              # repository hygiene checks
 ```
 
+The frontend runs on its own (verified in Sprint M0/S0.4):
+
+```bash
+cd frontend
+npm ci                                  # reproducible: installs from package-lock.json
+npm run dev                             # http://localhost:3000
+npm run build                           # production build, emits .next/standalone
+npm run lint                            # ESLint via next/core-web-vitals
+npm run type-check                      # tsc --noEmit
+```
+
+`NEXT_PUBLIC_*` variables are inlined into the browser bundle **at build time**,
+so they must be set before `npm run build`, not on the running container. See
+[docs/development/environment.md](docs/development/environment.md).
+
 ### After Milestone M0 (not yet available)
 
 ```bash
-docker compose up --build               # full stack
+docker compose up --build               # full stack — backend half still unproven
 poetry install && poetry run python main.py   # backend only
 ```
 

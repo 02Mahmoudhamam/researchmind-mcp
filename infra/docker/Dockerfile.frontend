@@ -3,6 +3,15 @@ WORKDIR /app
 COPY frontend/package*.json ./
 RUN npm ci
 COPY frontend/ .
+
+# NEXT_PUBLIC_* values are inlined into the browser bundle by `next build`,
+# so they must be supplied HERE, at build time. Setting them on the running
+# container (docker-compose `environment:`) cannot change an already-built
+# bundle. The default must be reachable from the user's BROWSER, which runs
+# on the host and cannot resolve the compose-internal name `backend`.
+ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+
 RUN npm run build
 
 FROM node:20-alpine AS runner

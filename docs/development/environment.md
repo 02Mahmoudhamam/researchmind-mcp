@@ -103,8 +103,17 @@ with the milestones that introduce them (below).
 
 | Variable | Default | Notes |
 |---|---|---|
-| `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | **Public** — visible in the browser bundle |
-| `NEXT_PUBLIC_APP_NAME` | `ResearchMind` | **Public** |
+| `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | **Public** — visible in the browser bundle. Read by `frontend/src/lib/api.ts`, which no page imports yet |
+| `NEXT_PUBLIC_APP_NAME` | `ResearchMind` | **Public**. No source file reads it yet *(verified M0/S0.4)* |
+
+> These are **build-time** values. `next build` inlines every `NEXT_PUBLIC_*`
+> variable into the bundle, so setting one on a running container cannot change
+> it. `docker-compose.yml` therefore passes `NEXT_PUBLIC_API_URL` as a **build
+> arg**; it was previously under `environment:`, where it could never take
+> effect *(corrected in M0/S0.4)*.
+>
+> The value is consumed by the browser on the host, so it uses the published
+> port — the compose-internal hostname `backend` does not resolve there.
 
 ## Planned variables
 
