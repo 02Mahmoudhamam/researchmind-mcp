@@ -35,6 +35,12 @@ mypy = "^1.10.0"
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
+[tool.black]
+# Kept in step with [tool.ruff].line-length below; if they disagree, `black`
+# reformats a line and `ruff check` then reports it, and CI can never be green.
+line-length = 88
+target-version = ["py312"]
+
 [tool.ruff]
 line-length = 88
 target-version = "py312"
@@ -42,3 +48,20 @@ target-version = "py312"
 [tool.mypy]
 python_version = "3.12"
 strict = true
+
+# Without these, mypy derives two module names for the same file — `models.agent`
+# and `shared.models.agent` — because shared/ and agents/ have no __init__.py
+# while their subpackages do. It then aborts with "Source file found twice under
+# different module names" before type-checking anything, so `mypy .` reported one
+# error and checked nothing. These make the repository root the single package
+# base, which is how the code is actually imported.
+explicit_package_bases = true
+mypy_path = "."
+
+# NOT ENFORCED IN CI YET — scheduled for Milestone M2, per the promotion schedule
+# in .github/workflows/ci-backend.yml. With the config above mypy runs properly
+# and reports 149 errors in 66 files, of which 54 are `empty-body`: the ~99 stubs
+# that declare a non-Optional return type and then `...`. Those are not type bugs
+# to fix, they are the unimplemented system. Turning this on now would mean
+# either a permanently red pipeline or blanket ignores, and both are worse than
+# an honest, dated deferral.
