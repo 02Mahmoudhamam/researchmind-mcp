@@ -6,6 +6,7 @@ once, before any table is declared or any migration is generated.
 """
 
 from sqlalchemy import MetaData
+from sqlalchemy.ext.asyncio import AsyncAttrs
 from sqlalchemy.orm import DeclarativeBase
 
 # Deterministic names for every index and constraint.
@@ -34,8 +35,14 @@ NAMING_CONVENTION: dict[str, str] = {
 }
 
 
-class Base(DeclarativeBase):
+class Base(AsyncAttrs, DeclarativeBase):
     """Base class for all ORM models.
+
+    ``AsyncAttrs`` supplies ``awaitable_attrs``, so an unloaded relationship can
+    be awaited explicitly. Without it, touching one under asyncio raises
+    ``MissingGreenlet`` — lazy loading is I/O, and there is no await point to
+    hang it on. Repositories should still prefer eager loading (``selectinload``)
+    for anything they know they need; this is the escape hatch, not the plan.
 
     Note for anyone adding a model: ``metadata`` is a reserved attribute on a
     declarative class — it is the :class:`~sqlalchemy.MetaData` object below.

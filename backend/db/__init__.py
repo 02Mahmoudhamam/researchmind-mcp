@@ -1,7 +1,8 @@
 """Database infrastructure: declarative base, engine and session factory.
 
-Contains no ORM models and no schema. Models and migrations arrive in Sprint
-M1/S1.2; repositories in M1/S1.3.
+The ORM models live in ``backend.db.models`` and the schema is owned by
+Alembic — importing this package does not create tables and never should.
+Repositories arrive in Sprint M1/S1.3.
 """
 
 from backend.db.base import NAMING_CONVENTION, Base
