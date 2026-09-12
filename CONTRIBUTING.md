@@ -12,6 +12,7 @@ Read first:
 
 - [docs/development/workflow.md](docs/development/workflow.md) — branches, commits, releases
 - [docs/development/testing.md](docs/development/testing.md) — what a real test looks like here
+- [docs/development/migrations.md](docs/development/migrations.md) — writing and verifying a schema change
 - [docs/adr/](docs/adr/) — why the system is shaped this way
 - [docs/security/principles.md](docs/security/principles.md) — non-negotiable invariants
 

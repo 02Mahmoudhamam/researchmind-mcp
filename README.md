@@ -157,7 +157,7 @@ Embeddings run **locally**, so a full stack needs exactly one secret:
 | **Authentication** | ❌ **Fails open.** Any non-empty bearer token is accepted |
 | **MCP layer** | ⚠️ Imports correctly and lists its 7 tools; no tool handler is implemented yet (M6) |
 | **RAG pipeline** | ❌ 1 of 17 stages implemented |
-| **Persistence** | ⚠️ PostgreSQL connects (M1/S1.1) — but no tables, no repositories yet |
+| **Persistence** | ⚠️ Schema exists — `users`, `documents`, `document_chunks` (M1/S1.2). No repositories yet, so nothing reads or writes it |
 | **Agents** | ❌ Return `success=True` without calling an LLM |
 | **Container builds** | ❌ All three fail |
 | **Test suite** | ❌ 1 failing, 1 uncollectable |
