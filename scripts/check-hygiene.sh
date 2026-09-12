@@ -45,6 +45,28 @@ for f in $(git ls-files '*.md'); do
 done
 [ "$broken" -eq 0 ] && ok "all internal markdown links resolve" || bad "broken markdown links"
 
+say "== 7. No source file is excluded by .gitignore =="
+# The inverse of check 3, and the more dangerous direction. Check 3 catches
+# artefacts that got IN; this catches source that was kept OUT. A bare `models/`
+# pattern — meant for downloaded ML weights — matched shared/models/ and removed
+# the entire domain model layer from the repository, while 47 modules imported
+# it. Nothing noticed for four sprints, because every local run used the
+# untracked files on disk. Ignore rules fail silently by design, so this asserts
+# the absence rather than trusting review.
+missing=$(find . -type f \( -name '*.py' -o -name '*.ts' -o -name '*.tsx' \) \
+            -not -path './.git/*' -not -path './.venv/*' -not -path '*/venv/*' \
+            -not -path '*/node_modules/*' -not -path '*/.next/*' \
+            -not -path '*/__pycache__/*' -not -name 'next-env.d.ts' 2>/dev/null \
+          | sed 's|^\./||' | sort \
+          | while read -r f; do
+              git ls-files --error-unmatch "$f" >/dev/null 2>&1 && continue
+              git check-ignore -q "$f" && printf '%s (%s)\n' "$f" "$(git check-ignore -v "$f" | cut -d: -f1-2)"
+            done)
+if [ -n "$missing" ]; then
+  bad "source files are being excluded by an ignore rule:"
+  printf '%s\n' "$missing" | while IFS= read -r line; do printf '     %s\n' "$line"; done
+else ok "no source file is hidden by .gitignore"; fi
+
 echo
 [ "$fail" -eq 0 ] && { echo "Repository hygiene: PASS"; exit 0; } \
                   || { echo "Repository hygiene: FAIL"; exit 1; }
