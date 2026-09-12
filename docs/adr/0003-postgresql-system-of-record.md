@@ -1,6 +1,6 @@
 # ADR-0003 — PostgreSQL as System of Record, Qdrant as index only
 
-- **Status:** Accepted
+- **Status:** Accepted — **§3 partially superseded, see Amendment (2026-09-12)**
 - **Date:** 2026-09-09
 - **Related:** ADR-0008, Milestones M1, M4; security/principles.md
 
@@ -63,3 +63,38 @@ pays one extra Postgres round-trip. Adds a service to compose.
 
 **Neutral.** Alembic must be maintained from the start, which is cheaper than
 retrofitting migrations onto a live schema.
+
+## Amendment — 2026-09-12 (Sprint M1/S1.3)
+
+**§3 is partially superseded.** The rest of this ADR stands unchanged.
+
+**What it said.** "Implement `BaseRepository` as `UserRepository`,
+`DocumentRepository`, `ChunkRepository`, finally giving the existing ABC its
+implementations."
+
+**What was built.** Three explicit repository classes in
+`backend/db/repositories/`. **None inherits `BaseRepository`**, and the ABC in
+`shared/interfaces/repository.py` still has zero implementations.
+
+**Why.** Every method on that ABC reaches a row by id alone — `get_by_id(id)`,
+`get_all()`, `update(id, entity)`, `delete(id)`. `docs/security/principles.md`
+§3 requires the ownership filter to be "a **required parameter of the repository
+signature**, not an optional `filters` dict entry", and states that "the safe
+path must be the only path". For a user-owned resource those cannot both hold:
+`get_all()` cannot be made ownership-safe at all, and the other three would each
+need an owner the signature does not have.
+
+`principles.md` is labelled non-negotiable — "nothing on this page is revisitable
+without an explicit, documented security exception" — while an ADR is by
+construction a decision someone might revisit. The invariant wins.
+
+**Cost of the change: none.** The ABC had zero implementations and zero callers
+when this was decided, so nothing depended on either outcome.
+
+The intent of §3 is unaffected: the three repositories exist, they are the sole
+data-access boundary, and ownership is enforced — more strictly than the ABC
+would have allowed, because `user_id` is now a required parameter that appears
+in the SQL predicate rather than a filter a caller may forget.
+
+`shared/interfaces/repository.py` carries a warning against inheriting it for an
+owned resource, and a note to delete it if nothing claims it by the end of M1.

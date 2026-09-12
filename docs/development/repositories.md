@@ -122,6 +122,10 @@ because ADR-0003's deletion order spans PostgreSQL and Qdrant and the service
 has to choose when the PostgreSQL half lands. `get_db_session` guarantees
 rollback and close, and also does not commit.
 
+The full contract — who commits, what happens when a later operation fails, and
+how to verify a commit in a test — is in
+[transactions.md](transactions.md).
+
 ## Return types
 
 Repositories return the Pydantic models from `shared/models/`, never ORM rows.

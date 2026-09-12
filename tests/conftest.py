@@ -210,3 +210,35 @@ def migrated_schema() -> None:
     )
     if result.returncode != 0:
         raise RuntimeError(f"alembic upgrade head failed:\n{result.stderr}")
+
+
+@pytest.fixture
+async def committing_session() -> AsyncIterator[Any]:
+    """A session whose commits are real, with the tables truncated afterwards.
+
+    ``db_session`` wraps each test in a transaction and rolls it back, which is
+    the right default — but it cannot be used to observe a commit. A service
+    that commits inside that outer transaction ends it, the teardown rollback
+    becomes a no-op, and the rows leak into the next test.
+
+    So transaction tests get a plain session and clean up by truncating. Order
+    matters in the TRUNCATE only for readability; CASCADE handles the foreign
+    keys either way.
+    """
+    from sqlalchemy import text
+
+    from backend.db.engine import get_engine
+    from backend.db.session import get_sessionmaker
+
+    async with get_sessionmaker()() as session:
+        try:
+            yield session
+        finally:
+            await session.rollback()
+            async with get_engine().begin() as connection:
+                await connection.execute(
+                    text(
+                        "TRUNCATE document_chunks, documents, users "
+                        "RESTART IDENTITY CASCADE"
+                    )
+                )

@@ -157,7 +157,7 @@ Embeddings run **locally**, so a full stack needs exactly one secret:
 | **Authentication** | ❌ **Fails open.** Any non-empty bearer token is accepted |
 | **MCP layer** | ⚠️ Imports correctly and lists its 7 tools; no tool handler is implemented yet (M6) |
 | **RAG pipeline** | ❌ 1 of 17 stages implemented |
-| **Persistence** | ⚠️ Schema + ownership-scoped repositories (M1/S1.2–S1.3). No service or route uses them yet |
+| **Persistence** | ⚠️ Schema, ownership-scoped repositories and `DocumentService` (M1/S1.2–S1.4). No route uses them — router bodies wait on auth (M2) |
 | **Agents** | ❌ Return `success=True` without calling an LLM |
 | **Container builds** | ❌ All three fail |
 | **Test suite** | ❌ 1 failing, 1 uncollectable |

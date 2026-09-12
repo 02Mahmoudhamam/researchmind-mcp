@@ -123,7 +123,7 @@ stub returns the right type). There is **no RAG evaluation of any kind**.
 | DB infrastructure | [backend/db/](backend/db/) | **Complete (M1/S1.1)** — `Base` + naming convention, lazy async engine, session factory. **No models, no migrations** |
 | API routers | [backend/api/routers/](backend/api/routers/) | Signatures only, all bodies `TODO` |
 | API schemas | [backend/api/schemas/](backend/api/schemas/) | **Complete** |
-| Services | [backend/services/](backend/services/) | Stubs, except `AgentService.run()` |
+| Services | [backend/services/](backend/services/) | `DocumentService` reads/deletes via repositories and owns the transaction (M1/S1.4); `upload_and_process` is M3. `AuthService` (M2), `SearchService` (M4) still stubs |
 | Security | [backend/security/](backend/security/) | **All stubs** — JWT, RBAC, `get_current_user` |
 | RAG pipeline | [document_processing/](document_processing/) | **All stubs** |
 | Vector store | [vector_db/qdrant/](vector_db/qdrant/) | Client + config complete; repository all stubs |
@@ -165,10 +165,13 @@ Edges that **do not exist** despite being documented:
   `backend/api/dependencies/database.py` yields `get_db_session`. The schema exists —
   `users`, `documents` and `document_chunks` from Alembic revision `0001`, ownership as
   foreign keys (`documents.user_id` RESTRICT, `document_chunks.document_id` CASCADE) — and
-  `backend/db/repositories/` now reads and writes it, with `user_id` a required parameter
-  on every method that can reach an owned row **and present in the SQL predicate**. What is
-  still missing is the layer above: `backend/services/*` bodies are still `...`, so no
-  route persists anything. `DocumentService` wiring is **S1.4**; auth is **M2**.
+  `backend/db/repositories/` reads and writes it, with `user_id` a required parameter on
+  every method that can reach an owned row **and present in the SQL predicate**.
+  `DocumentService` is wired to those repositories (M1/S1.4) and owns the transaction: it
+  commits, repositories only flush. What is still missing is the layer above — **router
+  bodies are still `...`**, because they depend on `get_current_user`, which verifies
+  nothing until **M2**. So nothing persists over HTTP yet. `AuthService` and
+  `SearchService` remain stubs (M2 and M4).
 - **No task queue.** Ingest runs inline in the request handler.
 - **No reranker, no hybrid/BM25 search, no query expansion.**
 
