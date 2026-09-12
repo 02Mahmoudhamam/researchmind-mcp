@@ -92,9 +92,13 @@ Routes are mounted under `/api/v1/{auth,documents,agents,search,workspace}`.
 2. ~~**`import mcp` resolves to this repo's `mcp/` directory**~~ — **RESOLVED in M0/S0.2.**
    The package was renamed to `mcp_server/`; `import mcp` now resolves to the SDK (1.12.4)
    and every `mcp_server` module imports.
-3. **Frontend build breaks** — `Dockerfile.frontend` copies `.next/standalone`, which needs
-   `output: 'standalone'` in a `next.config.js` that does not exist. `tailwind.config.js`
-   and `postcss.config.js` are also missing, so Tailwind never compiles.
+3. ~~**Frontend build breaks**~~ — **RESOLVED in M0/S0.4.** `next.config.mjs` sets
+   `output: 'standalone'`, so `Dockerfile.frontend` finds what it copies;
+   `postcss.config.js` + `tailwind.config.ts` (v3 format, for the pinned 3.4.x) make
+   Tailwind actually compile — previously `next build` exited 0 while emitting the literal
+   text `@tailwind base;…` and zero utility classes. `frontend/package-lock.json` is
+   committed, so the image's `npm ci` no longer fails outright. The frontend image builds
+   and serves; the **backend** half of `docker-compose up` is still unproven.
 
 Also note: **without a `.env`, almost nothing imports.** `ANTHROPIC_API_KEY` has no default,
 and five modules call `get_settings()` at import time (`main.py:6`, `backend/api/app.py:7`,
@@ -208,6 +212,8 @@ Qdrant will fail.
    `mcp-server` container, `Dockerfile.mcp` and `MCP_SERVER_HOST`/`PORT` are removed.
 7. ~~**No `LICENSE`**, no `.gitignore`, no `.dockerignore`~~ — **RESOLVED in the Repository
    Foundation phase (v0.0.1).** All three are committed.
+8. ~~**Frontend cannot build or style** (P0-12 in the audit)~~ — **RESOLVED in M0/S0.4.**
+   See "How to run" above.
 
 ## Plan of record
 
