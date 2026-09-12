@@ -14,6 +14,13 @@ mcp = "^1.0.0"
 anthropic = "^0.30.0"
 pydantic = {extras = ["email"], version = "^2.7.0"}
 pydantic-settings = "^2.3.0"
+sqlalchemy = {extras = ["asyncio"], version = "^2.0.30"}
+asyncpg = "^0.31.0"
+# Declared explicitly although sqlalchemy[asyncio] already pulls it. SQLAlchemy's
+# async bridge fails at runtime without greenlet, with a MissingGreenlet error
+# that names neither package — an implicit transitive dependency is the wrong
+# place for something load-bearing.
+greenlet = "^3.0.0"
 qdrant-client = "^1.10.0"
 redis = "^5.0.0"
 pymupdf = "^1.24.0"

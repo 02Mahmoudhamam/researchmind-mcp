@@ -86,6 +86,24 @@ with the milestones that introduce them (below).
 | `QDRANT_HOST` / `QDRANT_PORT` / `QDRANT_COLLECTION` | `localhost` / `6333` / `researchmind` |
 | `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` / `REDIS_TTL` | `localhost` / `6379` / `0` / `86400` |
 
+### Optional — PostgreSQL *(added in M1/S1.1)*
+
+| Variable | Default | Notes |
+|---|---|---|
+| `DATABASE_URL` | `postgresql+asyncpg://researchmind:researchmind@localhost:5432/researchmind` | **Must use the `postgresql+asyncpg://` scheme.** A `field_validator` on `Settings` rejects a synchronous DSN, because `postgresql://` resolves to psycopg2 — neither installed nor async — and the resulting error names neither this setting nor the fix |
+| `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | `5` / `5` | Concurrent sessions cap at the sum of the two |
+| `DB_POOL_TIMEOUT` | `30` | Seconds to wait for a free pool slot |
+| `DB_ECHO` | `false` | Echoes every statement **including values**. Local debugging only |
+
+The default host is `localhost`, matching `QDRANT_HOST` and `REDIS_HOST`: these are
+infrastructure endpoints for a developer running the API on the host, not secrets.
+The credentials are the development ones declared in `docker-compose.yml`.
+
+> **Under `docker compose` the backend service overrides `DATABASE_URL`** with host
+> `postgres`, which resolves only inside the compose network. `NEXT_PUBLIC_*` variables
+> are baked in at build time; `DATABASE_URL` is read at runtime, so changing it needs no
+> rebuild.
+
 ### Optional — auth
 
 | Variable | Default | Notes |
@@ -122,7 +140,6 @@ Documented so the configuration surface is predictable. **Not yet present in
 
 | Variable | Milestone | Purpose | ADR |
 |---|---|---|---|
-| `DATABASE_URL` | M1 | Postgres async DSN | [0003](../adr/0003-postgresql-system-of-record.md) |
 | `STORAGE_ROOT` | M3 | Object storage root | [0008](../adr/0008-local-content-addressed-object-storage.md) |
 | `MAX_UPLOAD_BYTES`, `MAX_PDF_PAGES` | M3 | Upload validation limits | — |
 | `CHUNK_SIZE_TOKENS`, `CHUNK_OVERLAP_TOKENS` | M3 | Chunking, in tokens | [0007](../adr/0007-defer-parent-document-retrieval.md) |
