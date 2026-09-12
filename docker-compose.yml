@@ -8,9 +8,24 @@ services:
     ports:
       - "8000:8000"
     env_file: .env
+    environment:
+      # Overrides whatever .env says. `postgres` resolves only inside the
+      # compose network, while DATABASE_URL defaults to localhost for a
+      # developer running the API on the host. Without this override the
+      # container would look for PostgreSQL inside itself.
+      DATABASE_URL: postgresql+asyncpg://researchmind:researchmind@postgres:5432/researchmind
     depends_on:
-      - qdrant
-      - redis
+      # Long form so `condition:` can be set. A bare `depends_on` list waits
+      # only for the container to start, which for PostgreSQL means "the
+      # process exists", not "it accepts connections" — the API would come up
+      # first and fail its first query. `service_started` is what the list form
+      # already meant for qdrant and redis, so their behaviour is unchanged.
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      redis:
+        condition: service_started
     volumes:
       - ./uploads:/app/uploads
 
@@ -28,6 +43,30 @@ services:
     depends_on:
       - backend
 
+  postgres:
+    # The system of record (ADR-0003). Pinned to a major version: an unpinned
+    # `latest` would silently move the on-disk data format under a named volume.
+    image: postgres:16
+    environment:
+      # Development credentials, matching the DATABASE_URL default in
+      # backend/config/settings.py. Not secrets, and not used anywhere else.
+      POSTGRES_USER: researchmind
+      POSTGRES_PASSWORD: researchmind
+      POSTGRES_DB: researchmind
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # -U and -d are not optional here: a bare `pg_isready` reports ready
+      # during the initdb phase, before the application database exists, so
+      # `condition: service_healthy` would unblock the API too early.
+      test: ["CMD-SHELL", "pg_isready -U researchmind -d researchmind"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   qdrant:
     image: qdrant/qdrant:latest
     ports:
@@ -44,5 +83,6 @@ services:
     command: redis-server --appendonly yes
 
 volumes:
+  postgres_data:
   qdrant_data:
   redis_data:
