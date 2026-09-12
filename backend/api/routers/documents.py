@@ -1,5 +1,6 @@
 """Document management endpoints."""
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
+
+from fastapi import APIRouter, Depends, UploadFile, File
 from backend.api.schemas.documents import DocumentResponse, DocumentListResponse
 from backend.services.document_service import DocumentService
 from backend.security.api_security import get_current_user
@@ -19,7 +20,9 @@ async def upload_document(
 
 
 @router.get("/", response_model=DocumentListResponse)
-async def list_documents(user: User = Depends(get_current_user), service: DocumentService = Depends()):
+async def list_documents(
+    user: User = Depends(get_current_user), service: DocumentService = Depends()
+):
     """List all documents for the current user."""
     ...  # TODO: implement
 

@@ -1,7 +1,8 @@
 """Document request/response schemas."""
+
 from pydantic import BaseModel
-from typing import List, Optional
-from shared.models.document import Document, DocumentStatus
+from typing import List
+from shared.models.document import DocumentStatus
 
 
 class DocumentResponse(BaseModel):

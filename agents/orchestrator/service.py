@@ -2,9 +2,9 @@
 Orchestrator Agent — service implementation.
 Role: orchestrate multi-agent research workflows
 """
+
 from agents.orchestrator.interface import OrchestratorAgentInterface
 from agents.orchestrator.config import orchestrator_config
-from agents.orchestrator.prompt import build_prompt
 from shared.models.agent import AgentInput, AgentOutput
 import time
 
@@ -19,8 +19,8 @@ class OrchestratorAgent(OrchestratorAgentInterface):
         """Execute the orchestrator task."""
         start = time.monotonic()
         try:
-            prompt = build_prompt(input.task, str(input.context))
-            # TODO: call Claude API via anthropic client
+            # TODO(M5): call Claude via the anthropic client with
+            # build_prompt(input.task, str(input.context)).
             result = None
             return AgentOutput(
                 agent_name=self.name,

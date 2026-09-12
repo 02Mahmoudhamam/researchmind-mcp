@@ -1,6 +1,7 @@
 """End-to-end document processing pipeline."""
+
 from pathlib import Path
-from shared.models.document import Document, DocumentStatus
+from shared.models.document import Document
 from document_processing.pdf_parser import PDFParser
 from document_processing.chunker import TextChunker
 from document_processing.embedder import EmbeddingGenerator
@@ -23,7 +24,9 @@ class DocumentProcessingPipeline:
 
     async def process(self, document: Document, file_path: Path) -> Document:
         """Run a document through the complete processing pipeline."""
-        ...  # TODO: wire up parser → chunker → embedder → vector store
+        # TODO(M3): wire up parser → chunker → embedder → vector store,
+        # advancing the document through shared.models.document.DocumentStatus.
+        ...
 
     async def reprocess(self, document_id: str) -> bool:
         """Re-run processing for an existing document."""

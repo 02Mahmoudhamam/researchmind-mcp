@@ -1,7 +1,8 @@
 """API-level security middleware and guards."""
-from fastapi import Depends, HTTPException, Security, status
+
+from fastapi import Depends, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from shared.models.user import User, UserRole, TokenData
+from shared.models.user import User, UserRole
 from backend.security.jwt_handler import JWTHandler
 from backend.security.rbac import RBACPolicy
 
@@ -19,6 +20,9 @@ async def get_current_user(
 
 def require_role(*roles: UserRole):
     """FastAPI dependency factory — enforces role requirements."""
-    async def _check(user: User = Depends(get_current_user)) -> User:
-        ...  # TODO: implement
+
+    async def _check(
+        user: User = Depends(get_current_user),
+    ) -> User: ...  # TODO: implement
+
     return _check

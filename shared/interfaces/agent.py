@@ -1,6 +1,6 @@
 """Base agent interface — all agents must implement this."""
+
 from abc import ABC, abstractmethod
-from typing import Any
 from shared.models.agent import AgentInput, AgentOutput
 
 

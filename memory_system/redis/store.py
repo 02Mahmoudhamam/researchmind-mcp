@@ -1,10 +1,10 @@
 """Redis implementation of BaseMemoryStore."""
+
 from shared.interfaces.memory import BaseMemoryStore
 from memory_system.redis.client import get_redis_client
 from memory_system.redis.config import RedisConfig
 from typing import Any, Optional
 from datetime import timedelta
-import json
 
 
 class RedisMemoryStore(BaseMemoryStore):

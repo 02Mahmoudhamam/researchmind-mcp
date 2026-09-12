@@ -2,9 +2,9 @@
 SemanticSearch Agent — service implementation.
 Role: perform semantic similarity search across papers
 """
+
 from agents.semantic_search.interface import SemanticSearchAgentInterface
 from agents.semantic_search.config import semantic_search_config
-from agents.semantic_search.prompt import build_prompt
 from shared.models.agent import AgentInput, AgentOutput
 import time
 
@@ -19,8 +19,8 @@ class SemanticSearchAgent(SemanticSearchAgentInterface):
         """Execute the semantic_search task."""
         start = time.monotonic()
         try:
-            prompt = build_prompt(input.task, str(input.context))
-            # TODO: call Claude API via anthropic client
+            # TODO(M5): call Claude via the anthropic client with
+            # build_prompt(input.task, str(input.context)).
             result = None
             return AgentOutput(
                 agent_name=self.name,

@@ -2,9 +2,9 @@
 Summarizer Agent — service implementation.
 Role: summarize research papers and documents
 """
+
 from agents.summarizer.interface import SummarizerAgentInterface
 from agents.summarizer.config import summarizer_config
-from agents.summarizer.prompt import build_prompt
 from shared.models.agent import AgentInput, AgentOutput
 import time
 
@@ -19,8 +19,8 @@ class SummarizerAgent(SummarizerAgentInterface):
         """Execute the summarizer task."""
         start = time.monotonic()
         try:
-            prompt = build_prompt(input.task, str(input.context))
-            # TODO: call Claude API via anthropic client
+            # TODO(M5): call Claude via the anthropic client with
+            # build_prompt(input.task, str(input.context)).
             result = None
             return AgentOutput(
                 agent_name=self.name,

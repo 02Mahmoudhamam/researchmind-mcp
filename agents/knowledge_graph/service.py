@@ -2,9 +2,9 @@
 KnowledgeGraph Agent — service implementation.
 Role: build and query knowledge graphs from papers
 """
+
 from agents.knowledge_graph.interface import KnowledgeGraphAgentInterface
 from agents.knowledge_graph.config import knowledge_graph_config
-from agents.knowledge_graph.prompt import build_prompt
 from shared.models.agent import AgentInput, AgentOutput
 import time
 
@@ -19,8 +19,8 @@ class KnowledgeGraphAgent(KnowledgeGraphAgentInterface):
         """Execute the knowledge_graph task."""
         start = time.monotonic()
         try:
-            prompt = build_prompt(input.task, str(input.context))
-            # TODO: call Claude API via anthropic client
+            # TODO(M5): call Claude via the anthropic client with
+            # build_prompt(input.task, str(input.context)).
             result = None
             return AgentOutput(
                 agent_name=self.name,

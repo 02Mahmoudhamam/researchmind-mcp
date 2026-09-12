@@ -1,9 +1,8 @@
 """Document lifecycle management service."""
-from pathlib import Path
+
 from fastapi import UploadFile
-from shared.models.document import Document, DocumentType
+from shared.models.document import Document
 from document_processing.pipeline import DocumentProcessingPipeline
-from shared.utils.id_generator import generate_id
 
 
 class DocumentService:

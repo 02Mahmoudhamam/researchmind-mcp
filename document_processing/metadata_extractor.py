@@ -1,11 +1,14 @@
 """AI-assisted metadata enrichment for research papers."""
-from shared.models.document import Document, DocumentMetadata
+
+from shared.models.document import DocumentMetadata
 
 
 class MetadataExtractor:
     """Uses AI to extract rich metadata from paper text."""
 
-    async def extract(self, text: str, base_metadata: DocumentMetadata) -> DocumentMetadata:
+    async def extract(
+        self, text: str, base_metadata: DocumentMetadata
+    ) -> DocumentMetadata:
         """Enrich metadata with AI-extracted fields (title, authors, abstract, keywords)."""
         ...  # TODO: call Claude with extraction prompt
 
