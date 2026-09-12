@@ -18,10 +18,13 @@ services:
     build:
       context: .
       dockerfile: infra/docker/Dockerfile.frontend
+      args:
+        # Build-time, not runtime: see Dockerfile.frontend. This URL is consumed
+        # by the browser on the host, so it uses the published port rather than
+        # the compose-internal hostname.
+        NEXT_PUBLIC_API_URL: http://localhost:8000
     ports:
       - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=http://backend:8000
     depends_on:
       - backend
 
