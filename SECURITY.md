@@ -38,11 +38,11 @@ As of the foundation baseline, verified by execution:
 
 | Issue | Status |
 |---|---|
-| **Authentication fails open** — any non-empty bearer token is accepted and resolves to a null user | Open — fixed in Milestone M2 |
+| **Authentication fails open** — any non-empty bearer token is accepted and resolves to a null user | **Still open** — fixed in Sprint M2/S2.2. M2/S2.1 built the token foundation (signing, verification, algorithm pinning) but deliberately did not change `get_current_user` |
 | No authorisation — RBAC is defined but never enforced | Open — M2 |
 | No tenant isolation — no relational store to check ownership against | Open — M1/M4 |
-| Default `changeme` secrets with no fail-fast | Open — M2 |
-| Unrestricted CORS (`allow_origins=["*"]`) | Open — M2 |
+| ~~Default `changeme` secrets with no fail-fast~~ | **Resolved — M2/S2.1.** The application refuses to start on a placeholder, empty or under-32-character secret outside `APP_ENV=development` |
+| ~~Unrestricted CORS (`allow_origins=["*"]`)~~ | **Resolved — M2/S2.1.** Explicit origin list from `CORS_ORIGINS`, enumerated methods and headers, credentials disabled |
 | No rate limiting | Open — M9 |
 | No upload validation | Open — M3 |
 

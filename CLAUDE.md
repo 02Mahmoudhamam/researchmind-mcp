@@ -57,7 +57,7 @@ Desktop) can drive them.
 
 Python `^3.12`, Poetry, FastAPI + Uvicorn, `mcp` SDK, `anthropic`, Pydantic v2 +
 pydantic-settings, `qdrant-client`, `redis`, `pymupdf`, `langchain-text-splitters`,
-`python-jose`, `passlib`, `structlog`, `httpx`.
+`PyJWT`, `passlib`, `structlog`, `httpx`.
 Frontend: Next.js 14 (App Router), React 18, TypeScript, Tailwind, axios, react-query,
 zustand, recharts.
 
