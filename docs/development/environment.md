@@ -65,8 +65,14 @@ with the milestones that introduce them (below).
 | `SECRET_KEY` | `changeme` | ⚠️ Application-level secret |
 | `JWT_SECRET` | `changeme` | ⚠️ JWT signing key |
 
-> **From Sprint M2/S2.1 the application refuses to start** if either is still
-> `changeme` and `APP_ENV != development`.
+> **Since Sprint M2/S2.1 the application refuses to start** outside
+> `APP_ENV=development` if either secret is a known placeholder (`changeme`,
+> `secret`, `your-secret-key-here`, …), empty, or shorter than 32 characters.
+> The error names the setting and the problem and never echoes the value — an
+> error that prints a secret puts it in logs and issue reports.
+>
+> 32 characters is not arbitrary: PyJWT raises `InsecureKeyLengthWarning` below
+> it for HS256 (RFC 7518 §3.2).
 
 ### Optional — application
 
@@ -108,8 +114,19 @@ The credentials are the development ones declared in `docker-compose.yml`.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `JWT_ALGORITHM` | `HS256` | Pinned explicitly at decode; never read from the token header |
-| `JWT_EXPIRE_MINUTES` | `1440` | Reduced to `60` at M2 — access tokens only, no refresh |
+| `JWT_ALGORITHM` | `HS256` | Pinned explicitly at decode; never read from the token header. Constrained to `HS256`/`HS384`/`HS512`, so `none` is refused at startup |
+| `JWT_EXPIRE_MINUTES` | `60` | Access tokens only. No refresh token and no server-side revocation, so a stolen token is valid until expiry *(M2/S2.1)* |
+
+### Optional — CORS *(added in M2/S2.1)*
+
+| Variable | Default | Notes |
+|---|---|---|
+| `CORS_ORIGINS` | `http://localhost:3000` | **Comma-separated**, not JSON. Matches the frontend dev server and its published compose port. Replaces the previous `allow_origins=["*"]` |
+
+Credentials are **not** enabled: the frontend sends an `Authorization` bearer
+header rather than a cookie (`frontend/src/lib/api.ts`), so credentialed CORS
+buys nothing — and it is the setting that would make a permissive origin policy
+genuinely dangerous.
 
 ### Development-only
 
@@ -147,7 +164,6 @@ Documented so the configuration surface is predictable. **Not yet present in
 | `RETRIEVAL_TOP_K`, `RETRIEVAL_SCORE_THRESHOLD` | M4 | Retrieval tuning | [0005](../adr/0005-provider-derived-embedding-dimension.md) |
 | `CLAUDE_MODEL`, `LLM_TIMEOUT_SECONDS`, `LLM_MAX_RETRIES` | M5 | Generation | [0006](../adr/0006-single-research-agent.md) |
 | `ARQ_MAX_JOBS`, `INGEST_JOB_TIMEOUT_SECONDS` | M3 | Job queue | [0009](../adr/0009-arq-for-asynchronous-ingestion.md) |
-| `CORS_ALLOWED_ORIGINS` | M2 | Replaces the wildcard | — |
 | `RATE_LIMIT_*` | M9 | Rate limiting | — |
 
 > `MCP_SERVER_HOST` and `MCP_SERVER_PORT` **were removed in Sprint M0/S0.2**.

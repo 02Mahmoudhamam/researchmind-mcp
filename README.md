@@ -103,7 +103,7 @@ Rationale for every structural choice is in [docs/adr/](docs/adr/).
 | **Embeddings** | FastEmbed · `BAAI/bge-small-en-v1.5` (384-d, local) |
 | **Document parsing** | PyMuPDF (block mode, thread-offloaded) |
 | **MCP** | `mcp` Python SDK, stdio transport |
-| **Auth** | JWT (`python-jose`, algorithm pinned) · passlib/bcrypt |
+| **Auth** | JWT (`PyJWT`, HS256 pinned at decode, 60-minute access tokens) · password hashing arrives in M2/S2.3 |
 | **Frontend** | Next.js 14 (App Router) · React 18 · TypeScript · Tailwind · TanStack Query · Zustand · axios |
 | **Testing** | pytest · pytest-asyncio · testcontainers · httpx · gitleaks |
 | **Quality** | ruff · black *(both enforced in CI)* · mypy strict *(runs; enforced from M2)* |

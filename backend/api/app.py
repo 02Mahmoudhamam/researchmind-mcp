@@ -9,8 +9,6 @@ from backend.config.settings import get_settings
 from backend.db.engine import dispose_engine
 from backend.api.routers import documents, agents, search, auth, workspace, health
 
-settings = get_settings()
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -34,6 +32,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
+    # Read inside the factory, not at import. A module-level `get_settings()`
+    # freezes configuration the moment anything imports this module — which is
+    # how `QdrantConfig` and `RedisConfig` became untestable — and it means a
+    # test that overrides settings has already lost.
+    settings = get_settings()
+
     app = FastAPI(
         title=settings.APP_NAME,
         version="0.1.0",
@@ -41,11 +45,19 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # An explicit origin list, not "*". Once Authorization means something, a
+    # wildcard lets any page a user visits drive this API with their token.
+    #
+    # allow_credentials stays False on purpose: the frontend sends a bearer
+    # header (frontend/src/lib/api.ts), not a cookie, so credentialed CORS buys
+    # nothing — and enabling it would be the thing that makes a wildcard
+    # genuinely dangerous rather than merely wrong.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=settings.CORS_ORIGINS,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
     )
 
     # Mounted at the root, without a version prefix: liveness and readiness are

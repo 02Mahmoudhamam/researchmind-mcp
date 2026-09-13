@@ -1,0 +1,29 @@
+# Reviewed false positives, pinned by fingerprint.
+#
+# A fingerprint is commit:file:rule:line, so each entry exempts exactly one
+# finding in exactly one commit. It is not a path or a rule exclusion: the same
+# file, the same rule, or a later commit all still fail. That narrowness is the
+# point — an allowlist that silences a scanner broadly is worse than no scanner,
+# because it reads as coverage.
+#
+# ---------------------------------------------------------------------------
+# Sprint M2/S2.1 — test fixtures that looked like credentials
+#
+# The values were `test-secret-key-at-least-32-chars-long` and
+# `test-jwt-secret-at-least-32-chars-long` in tests/conftest.py, and an
+# equivalent literal in tests/unit/test_jwt.py. They were never valid anywhere:
+# they exist so the suite has signing keys that meet the 32-character floor
+# Settings enforces.
+#
+# gitleaks was right to flag them. A high-entropy string beside `SECRET_KEY =`
+# is precisely what a leaked key looks like, and a scanner that stayed quiet
+# about it would be no use for the real thing.
+#
+# The fix was to the fixtures, not the scanner: they are now deliberately
+# repetitive (`not-a-secret-not-a-secret-...`), low-entropy, and read as test
+# data at a glance. These three entries cover only the commit where the old
+# values already landed, which cannot be edited without rewriting published
+# history.
+cffab46e238e006b93b3a173fcf0431ce192fac5:tests/conftest.py:generic-api-key:31
+cffab46e238e006b93b3a173fcf0431ce192fac5:tests/conftest.py:generic-api-key:32
+cffab46e238e006b93b3a173fcf0431ce192fac5:tests/unit/test_jwt.py:generic-api-key:22

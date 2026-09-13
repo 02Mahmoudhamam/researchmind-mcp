@@ -28,7 +28,13 @@ qdrant-client = "^1.10.0"
 redis = "^5.0.0"
 pymupdf = "^1.24.0"
 langchain-text-splitters = "^0.2.0"
-python-jose = "^3.3.0"
+# PyJWT rather than python-jose. Both were patched at the versions pinned here,
+# so this is a dependency-surface decision, not a CVE response: python-jose
+# requires `ecdsa`, which carries GHSA-wj6h-64fc-37mp (high, Minerva timing
+# attack, no fix planned) and which HS256 does not need at all. PyJWT was
+# already present transitively via redis, so declaring it directly adds nothing
+# to the image while removing ecdsa, rsa and pyasn1 from the tree.
+pyjwt = "^2.13"
 passlib = "^1.7.4"
 python-multipart = "^0.0.9"
 structlog = "^24.2.0"

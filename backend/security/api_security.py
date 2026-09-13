@@ -3,12 +3,13 @@
 from fastapi import Depends, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from shared.models.user import User, UserRole
-from backend.security.jwt_handler import JWTHandler
-from backend.security.rbac import RBACPolicy
 
+# The only module-level object left, and it holds no configuration: HTTPBearer
+# just parses the Authorization header. The JWTHandler and RBACPolicy instances
+# that used to live here were constructed at import, unused by any code path,
+# and would have frozen settings for the life of the process. Sprint M2/S2.2
+# builds the resolver that needs them, per request.
 security_scheme = HTTPBearer()
-jwt_handler = JWTHandler()
-rbac = RBACPolicy()
 
 
 async def get_current_user(

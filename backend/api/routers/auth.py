@@ -17,9 +17,3 @@ async def register(body: RegisterRequest, service: AuthService = Depends()):
 async def login(body: LoginRequest, service: AuthService = Depends()):
     """Authenticate and receive a JWT token."""
     ...  # TODO: implement
-
-
-@router.post("/refresh")
-async def refresh_token():
-    """Issue a new token from a valid refresh token."""
-    ...  # TODO: implement
