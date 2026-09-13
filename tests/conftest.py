@@ -24,8 +24,12 @@ _TEST_ENV: dict[str, str] = {
     "ANTHROPIC_API_KEY": "test-anthropic-api-key",
     # Placeholders. Sprint M2/S2.1 makes the application refuse to start on the
     # "changeme" defaults outside development, so tests set explicit values.
-    "SECRET_KEY": "test-secret-key",
-    "JWT_SECRET": "test-jwt-secret",
+    # At least 32 characters. PyJWT 2.13 raises InsecureKeyLengthWarning below
+    # that (RFC 7518 §3.2), and Settings enforces the same floor outside
+    # development — a test key shorter than a real one would be testing a
+    # configuration nothing may ship.
+    "SECRET_KEY": "test-secret-key-at-least-32-chars-long",
+    "JWT_SECRET": "test-jwt-secret-at-least-32-chars-long",
     "APP_ENV": "test",
     "DEBUG": "false",
     "LOG_LEVEL": "WARNING",
