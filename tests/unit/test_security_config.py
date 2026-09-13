@@ -12,7 +12,9 @@ from pydantic import ValidationError
 
 from backend.config.settings import Settings
 
-STRONG = "a-real-looking-signing-key-of-sufficient-length"
+# Long enough to pass the 32-character floor, repetitive enough not to trip
+# the secret scanner. See the note in tests/unit/test_jwt.py.
+STRONG = "not-a-real-secret-not-a-real-secret-not"
 
 
 def _settings(**overrides: object) -> Settings:

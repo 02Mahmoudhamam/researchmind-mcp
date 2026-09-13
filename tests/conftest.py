@@ -28,8 +28,11 @@ _TEST_ENV: dict[str, str] = {
     # that (RFC 7518 §3.2), and Settings enforces the same floor outside
     # development — a test key shorter than a real one would be testing a
     # configuration nothing may ship.
-    "SECRET_KEY": "test-secret-key-at-least-32-chars-long",
-    "JWT_SECRET": "test-jwt-secret-at-least-32-chars-long",
+    #
+    # Deliberately repetitive, so the gitleaks scan in CI reads them as the
+    # fixtures they are rather than as leaked credentials.
+    "SECRET_KEY": "test-secret-test-secret-test-secret-test",
+    "JWT_SECRET": "test-jwt-test-jwt-test-jwt-test-jwt-test",
     "APP_ENV": "test",
     "DEBUG": "false",
     "LOG_LEVEL": "WARNING",

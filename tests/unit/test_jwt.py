@@ -19,8 +19,14 @@ from backend.config.settings import Settings
 from backend.security.jwt_handler import JWTHandler, TokenError
 from shared.models.user import TokenData, UserRole
 
-SECRET = "a-test-signing-key-that-is-long-enough-32"
-OTHER_SECRET = "a-different-signing-key-also-long-enough"
+# Deliberately repetitive. These are long enough to satisfy the 32-character
+# floor but low-entropy enough that the gitleaks scan in CI does not read them
+# as a real credential — which it did, on the first push, for exactly the
+# reason it should have: a high-entropy string next to `SECRET =` is what a
+# leaked key looks like. Making the fixture look like a fixture is the fix;
+# adding an allowlist entry would have been teaching the scanner to stay quiet.
+SECRET = "not-a-secret-not-a-secret-not-a-secret"
+OTHER_SECRET = "other-secret-other-secret-other-secret"
 
 
 def _settings(**overrides: object) -> Settings:
