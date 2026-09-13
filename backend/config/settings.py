@@ -1,8 +1,40 @@
 """Application settings via pydantic-settings."""
 
-from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Annotated
+
+from pydantic import field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from functools import lru_cache
+
+# Values a signing key must never have outside development. Not an exhaustive
+# blocklist — a short list of what people actually leave in place, plus a length
+# floor, catches the realistic mistake. The point is to fail loudly on the
+# placeholder this repository shipped, not to score secret entropy.
+_PLACEHOLDER_SECRETS = frozenset(
+    {
+        "changeme",
+        "change-me",
+        "change_me",
+        "changethis",
+        "secret",
+        "password",
+        "your-secret-key-here",
+        "your-jwt-secret",
+        "test",
+        "dev",
+        "development",
+        "production",
+    }
+)
+
+# HS256 keys should carry at least as much entropy as the digest they produce.
+_MINIMUM_SECRET_LENGTH = 32
+
+# Only symmetric HMAC algorithms. This is what makes JWT_ALGORITHM safe to read
+# from configuration at all: without the allowlist, `JWT_ALGORITHM=none` would
+# disable signature verification, and an asymmetric value would open the
+# public-key-as-HMAC-secret confusion this project explicitly pins against.
+_ALLOWED_JWT_ALGORITHMS = frozenset({"HS256", "HS384", "HS512"})
 
 
 class Settings(BaseSettings):
@@ -15,6 +47,12 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     APP_PORT: int = 8000
     DEBUG: bool = False
+    # Still defaulted, and still refused outside development by
+    # _reject_weak_secrets_outside_development below. security/principles.md is
+    # worded as "refuses to start with default `changeme` secrets outside
+    # APP_ENV=development", which requires the default to exist in order to be
+    # rejected — a developer running locally should not need to invent a secret
+    # before the application will boot.
     SECRET_KEY: str = "changeme"
 
     # Claude
@@ -51,14 +89,91 @@ class Settings(BaseSettings):
     REDIS_DB: int = 0
     REDIS_TTL: int = 86400
 
+    # CORS
+    #
+    # Comma-separated in the environment, a list here. `NoDecode` is required:
+    # without it pydantic-settings tries to JSON-decode a list field from the
+    # environment and raises SettingsError *before* any validator runs, so
+    # `CORS_ORIGINS=http://localhost:3000` would be a startup crash rather than
+    # a value. Verified against pydantic-settings 2.15.
+    #
+    # The default matches the frontend's dev server and its published compose
+    # port (frontend/package.json `next dev`, docker-compose.yml "3000:3000").
+    CORS_ORIGINS: Annotated[list[str], NoDecode] = ["http://localhost:3000"]
+
     # JWT
     JWT_SECRET: str = "changeme"
     JWT_ALGORITHM: str = "HS256"
-    JWT_EXPIRE_MINUTES: int = 1440
+    # 60 minutes, per security/principles.md §6: access tokens only, no refresh
+    # token in the MVP, and no server-side revocation — so a stolen token is
+    # valid until it expires. That is the whole argument for a short TTL.
+    JWT_EXPIRE_MINUTES: int = 60
 
     # Logging
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "json"
+
+    @field_validator("JWT_ALGORITHM")
+    @classmethod
+    def _require_symmetric_algorithm(cls, value: str) -> str:
+        """Constrain the configured algorithm to a safe allowlist.
+
+        The decode call passes this value explicitly rather than letting PyJWT
+        read `alg` from the token header — that is algorithm confusion. Bounding
+        it here is what lets the setting stay configurable without becoming a
+        way to turn verification off.
+        """
+        if value not in _ALLOWED_JWT_ALGORITHMS:
+            raise ValueError(
+                f"JWT_ALGORITHM must be one of "
+                f"{sorted(_ALLOWED_JWT_ALGORITHMS)}, got {value!r}"
+            )
+        return value
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def _split_origins(cls, value: object) -> object:
+        """Accept `a,b` from the environment as well as a real list."""
+        if isinstance(value, str):
+            return [origin.strip() for origin in value.split(",") if origin.strip()]
+        return value
+
+    @model_validator(mode="after")
+    def _reject_weak_secrets_outside_development(self) -> "Settings":
+        """Refuse to start with a placeholder signing key (principles.md §6).
+
+        A system that boots with a known signing key is worse than one that
+        refuses to boot: every token it issues is forgeable by anyone who has
+        read the repository, and nothing about its behaviour says so.
+
+        Development is exempt so `cp .env.example .env` still works; everything
+        else — staging, CI-with-real-config, production — must set real values.
+
+        The message names the setting and the problem, never the value. An
+        error that echoes a secret puts it in logs, terminals and issue reports.
+        """
+        if self.APP_ENV.strip().lower() == "development":
+            return self
+
+        problems: list[str] = []
+        for name in ("SECRET_KEY", "JWT_SECRET"):
+            value: str = getattr(self, name)
+            if not value.strip():
+                problems.append(f"{name} is empty")
+            elif value.strip().lower() in _PLACEHOLDER_SECRETS:
+                problems.append(f"{name} is a known placeholder value")
+            elif len(value) < _MINIMUM_SECRET_LENGTH:
+                problems.append(
+                    f"{name} is shorter than {_MINIMUM_SECRET_LENGTH} characters"
+                )
+
+        if problems:
+            raise ValueError(
+                f"insecure secret configuration for APP_ENV={self.APP_ENV!r}: "
+                + "; ".join(problems)
+                + ". Set real values; see docs/development/environment.md."
+            )
+        return self
 
     @field_validator("DATABASE_URL")
     @classmethod
