@@ -24,6 +24,7 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.dependencies.database import get_db_session
+from backend.services.auth_service import AuthService
 from backend.services.document_service import DocumentService
 
 
@@ -32,3 +33,16 @@ async def get_document_service(
 ) -> DocumentService:
     """Build a DocumentService bound to this request's session."""
     return DocumentService(session)
+
+
+async def get_auth_service(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> AuthService:
+    """Build an AuthService bound to this request's session.
+
+    A provider rather than a bare `Depends()` on the class. FastAPI inspects a
+    bare-`Depends` class's `__init__` as if its parameters were request fields,
+    and an `AsyncSession` is not one — the same `FastAPIError` that forced this
+    pattern for `DocumentService` in M1/S1.4.
+    """
+    return AuthService(session)

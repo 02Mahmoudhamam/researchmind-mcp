@@ -39,8 +39,15 @@ security_scheme = HTTPBearer(auto_error=False)
 _UNAUTHENTICATED_DETAIL = "Could not validate credentials"
 
 
-def _unauthenticated() -> HTTPException:
-    """The single 401 every authentication failure produces."""
+def unauthenticated() -> HTTPException:
+    """The single 401 every authentication failure produces.
+
+    Public since M2/S2.4, so the login route raises the *same object shape* a
+    forged bearer token raises. Two helpers would have been two chances for the
+    detail string or the challenge header to diverge, and the whole point is
+    that a failed sign-in and a failed token are indistinguishable from
+    outside.
+    """
     return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail=_UNAUTHENTICATED_DETAIL,
@@ -74,7 +81,7 @@ async def get_current_user(
         # No Authorization header, an empty one, empty credentials after the
         # scheme, or a scheme that is not Bearer. HTTPBearer folds these into
         # one None, and they are one answer.
-        raise _unauthenticated()
+        raise unauthenticated()
 
     try:
         return await resolve_principal(credentials.credentials, UserRepository(session))
@@ -83,7 +90,7 @@ async def get_current_user(
         # was, which is exactly what the client must not learn. It stays on the
         # exception for logs and for the test that asserts the categories are
         # distinguishable internally and identical externally.
-        raise _unauthenticated() from exc
+        raise unauthenticated() from exc
 
 
 def require_role(
