@@ -78,6 +78,21 @@ class Settings(BaseSettings):
     # otherwise, and it will happily print values from a real database.
     DB_ECHO: bool = False
 
+    # Document storage (ADR-0008) and upload validation (principles.md §4)
+    #
+    # Relative, so it resolves against the working directory: `/app` in the
+    # backend image, where docker-compose.yml mounts `./uploads:/app/uploads`,
+    # and the repository root for local development, where `/uploads/` is
+    # gitignored. Tests point it at a temporary directory (tests/conftest.py).
+    STORAGE_ROOT: str = "uploads"
+    # 50 MiB and 500 pages. Named by docs/development/environment.md with no
+    # values, so these are chosen rather than inherited: comfortably above a
+    # research paper or a thesis, well below what a single ingestion job should
+    # be asked to hold in memory. Both are limits on what the system accepts,
+    # not on what PDFs exist, so an operator with longer documents raises them.
+    MAX_UPLOAD_BYTES: int = 50 * 1024 * 1024
+    MAX_PDF_PAGES: int = 500
+
     # Qdrant
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
@@ -174,6 +189,32 @@ class Settings(BaseSettings):
                 + ". Set real values; see docs/development/environment.md."
             )
         return self
+
+    @field_validator("MAX_UPLOAD_BYTES", "MAX_PDF_PAGES")
+    @classmethod
+    def _require_positive_limit(cls, value: int) -> int:
+        """A limit of zero or less would refuse every upload, or none.
+
+        Zero refuses everything, which looks like an outage; a negative number
+        compared against a length is True for every file, which looks like the
+        limit is working. Neither is a configuration anyone means.
+        """
+        if value <= 0:
+            raise ValueError("upload limits must be positive integers")
+        return value
+
+    @field_validator("STORAGE_ROOT")
+    @classmethod
+    def _require_storage_root(cls, value: str) -> str:
+        """An empty root would resolve to the working directory itself.
+
+        That is the repository checkout in development and `/app` in the image —
+        blobs written among source files, and a key collision away from
+        overwriting one.
+        """
+        if not value.strip():
+            raise ValueError("STORAGE_ROOT must not be empty")
+        return value
 
     @field_validator("DATABASE_URL")
     @classmethod

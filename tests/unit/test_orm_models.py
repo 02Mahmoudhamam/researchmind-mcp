@@ -8,6 +8,7 @@ tests/integration/test_migrations.py.
 from typing import Any
 
 import pytest
+from sqlalchemy import BigInteger, Integer, String
 from sqlalchemy import Enum as SAEnum
 
 from backend.db.base import Base
@@ -51,6 +52,12 @@ class TestTables:
                     "status",
                     "metadata",
                     "chunk_count",
+                    # M3/S3.1, ADR-0008 §4
+                    "storage_key",
+                    "content_hash",
+                    "size_bytes",
+                    "mime_type",
+                    "page_count",
                     "created_at",
                     "updated_at",
                     "deleted_at",
@@ -209,12 +216,30 @@ class TestEnums:
 
 class TestDeferredColumns:
     @pytest.mark.parametrize(
-        "column",
-        ["storage_key", "content_hash", "size_bytes", "mime_type", "page_count"],
+        ("column", "sql_type", "length"),
+        [
+            ("storage_key", String, 255),
+            ("content_hash", String, 64),
+            ("size_bytes", BigInteger, None),
+            ("mime_type", String, 255),
+            ("page_count", Integer, None),
+        ],
     )
-    def test_document_storage_columns_are_not_here_yet(self, column: str) -> None:
-        """ADR-0008 assigns these to Milestone M3, with the code that writes them."""
-        assert column not in Base.metadata.tables["documents"].c
+    def test_document_storage_columns_arrived_with_upload(
+        self, column: str, sql_type: type, length: int | None
+    ) -> None:
+        """ADR-0008 assigned these to M3 "with the code that writes them".
+
+        This test used to assert their absence. M3/S3.1 is that code, so it now
+        asserts their shape: present, the right type and width, and nullable —
+        documents created before upload have no bytes, and NOT NULL would force
+        invented values onto them.
+        """
+        table_column = Base.metadata.tables["documents"].c[column]
+
+        assert isinstance(table_column.type, sql_type)
+        assert getattr(table_column.type, "length", None) == length
+        assert table_column.nullable is True
 
     @pytest.mark.parametrize("column", ["section", "page_start", "page_end"])
     def test_chunk_section_columns_are_not_here_yet(self, column: str) -> None:

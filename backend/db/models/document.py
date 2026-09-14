@@ -1,8 +1,7 @@
 """Persistence model for a document.
 
-The record of what exists and who owns it. Upload, storage and parsing are
-Milestone M3 and add their own columns then; this table is the minimum that
-makes ownership a database constraint.
+The record of what exists and who owns it, and — since M3/S3.1 — where its bytes
+are and what they are (ADR-0008). Parsing adds its own columns when it lands.
 """
 
 import uuid
@@ -10,6 +9,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     Enum,
@@ -91,6 +91,34 @@ class DocumentORM(Base):
     # document_chunks exists, so it can always be reconciled.
     chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    # --- Stored content (ADR-0008), written by upload in M3/S3.1 ------------
+    #
+    # All five nullable, for the reason `users.password_hash` is: rows that
+    # predate upload exist — every document M1 and M2 created — and they have
+    # no bytes anywhere. Making these NOT NULL would mean inventing a storage
+    # key and a hash for a file that was never stored. Upload always sets all
+    # five; the upload tests assert it.
+
+    # `{user_id}/{sha256}.pdf`, relative to the storage root. Never an absolute
+    # path and never derived from `filename`. 105 characters today; 255 leaves
+    # room for a longer extension or a prefixed backend without a migration.
+    storage_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # SHA-256 of the content, lowercase hex. Part of the key, and the column the
+    # per-owner uniqueness rule below is defined on (ADR-0010).
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # BIGINT: the configured cap is 50 MiB, but a cap is configuration and a
+    # column type is a migration.
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+    # Sniffed from the bytes, never taken from the client's Content-Type.
+    mime_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # Counted at upload, because the page cap in principles.md §4 has to be
+    # enforced before the file is stored.
+    page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -138,6 +166,22 @@ class DocumentORM(Base):
             postgresql_where=deleted_at.is_(None),
         ),
         CheckConstraint("chunk_count >= 0", name="chunk_count_non_negative"),
+        # NULL passes a CHECK, so rows without stored content are unaffected.
+        CheckConstraint("size_bytes > 0", name="size_bytes_positive"),
+        CheckConstraint("page_count > 0", name="page_count_positive"),
+        # ADR-0010: one live document per owner per content. The constraint,
+        # not the service's lookup, is what makes this true — two concurrent
+        # uploads of the same file both pass a lookup. Partial on
+        # `deleted_at IS NULL`, so deleting a document and uploading the file
+        # again is allowed; and NULL hashes never collide, so pre-upload rows
+        # are untouched.
+        Index(
+            "uq_documents_user_id_content_hash",
+            "user_id",
+            "content_hash",
+            unique=True,
+            postgresql_where=deleted_at.is_(None),
+        ),
     )
 
     def __repr__(self) -> str:

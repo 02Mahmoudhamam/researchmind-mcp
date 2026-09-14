@@ -1,6 +1,6 @@
 """Document-related models."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum
@@ -39,8 +39,28 @@ class Document(BaseModel):
     status: DocumentStatus = DocumentStatus.PENDING
     metadata: DocumentMetadata = Field(default_factory=DocumentMetadata)
     chunk_count: int = 0
+    # Facts about the stored bytes (ADR-0008), set by upload. None for documents
+    # created before upload existed. The storage key is deliberately not here:
+    # it is an internal location, and this model is what reads return.
+    content_hash: Optional[str] = None
+    size_bytes: Optional[int] = None
+    mime_type: Optional[str] = None
+    page_count: Optional[int] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class UploadOutcome(BaseModel):
+    """What an upload produced: the document, and whether this upload created it.
+
+    `created` is False when the caller already had a live document with the same
+    content (ADR-0010). The distinction reaches the client as 202 versus 200.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    document: Document
+    created: bool
 
 
 class DocumentChunk(BaseModel):

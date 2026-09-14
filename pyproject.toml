@@ -47,6 +47,12 @@ pyjwt = "^2.13"
 # time; there is nothing left for an abstraction layer to add here.
 bcrypt = "^4.2"
 python-multipart = "^0.0.9"
+# Declared although FastAPI already pulls it in, for the reason greenlet is: it
+# is load-bearing. Upload storage and PDF validation (M3) run blocking calls in
+# worker threads through `anyio.to_thread.run_sync`, which ADR-0009 names, and a
+# direct import of an undeclared transitive dependency breaks the day the
+# framework stops needing it.
+anyio = "^4.0"
 structlog = "^24.2.0"
 httpx = "^0.27.0"
 
@@ -84,9 +90,9 @@ strict = true
 explicit_package_bases = true
 mypy_path = "."
 
-# ENFORCED IN CI FOR THE M2 SECURITY SURFACE ONLY (M2/S2.5). The file list is in
-# .github/workflows/ci-backend.yml. The whole repository is not enforced: `mypy .`
-# reports 121 errors, most of them `empty-body` — stubs in M3–M6 subsystems that
+# ENFORCED IN CI FOR FINISHED SPRINTS' FILES ONLY (since M2/S2.5; extended in
+# M3/S3.1). The file list is in .github/workflows/ci-backend.yml. The whole
+# repository is not enforced: `mypy .` reports 119 errors, most of them `empty-body` — stubs in M3–M6 subsystems that
 # declare a non-Optional return type and then `...`. Those are not type bugs to
 # fix, they are the unimplemented system, and each milestone adds the files it
 # makes real to the enforced list.

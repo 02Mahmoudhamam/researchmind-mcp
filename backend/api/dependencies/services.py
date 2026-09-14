@@ -24,15 +24,42 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.dependencies.database import get_db_session
+from backend.config.settings import get_settings
+from backend.ingestion import DeferredIngestionQueue
 from backend.services.auth_service import AuthService
 from backend.services.document_service import DocumentService
+from backend.storage import LocalStorage
+from shared.interfaces.ingestion import IngestionQueue
+from shared.interfaces.storage import Storage
+
+
+def get_storage() -> Storage:
+    """The document storage backend (ADR-0008).
+
+    Reads `STORAGE_ROOT` per request rather than at import, so configuration is
+    never frozen by the first module that happens to import this one — the same
+    rule `backend/db/engine.py` follows. Constructing a `LocalStorage` touches no
+    disk.
+    """
+    return LocalStorage(get_settings().STORAGE_ROOT)
+
+
+def get_ingestion_queue() -> IngestionQueue:
+    """Where accepted uploads are handed off (ADR-0009).
+
+    The deferred queue until M3/S3.2 brings the ARQ worker; replacing it is a
+    change to this function and nothing else.
+    """
+    return DeferredIngestionQueue()
 
 
 async def get_document_service(
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    storage: Annotated[Storage, Depends(get_storage)],
+    ingestion: Annotated[IngestionQueue, Depends(get_ingestion_queue)],
 ) -> DocumentService:
     """Build a DocumentService bound to this request's session."""
-    return DocumentService(session)
+    return DocumentService(session, storage=storage, ingestion=ingestion)
 
 
 async def get_auth_service(

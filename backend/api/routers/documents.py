@@ -1,7 +1,8 @@
 """Document management endpoints.
 
-Three of the four are real as of M2/S2.5: list, get and delete are wired to the
-`DocumentService` M1 built. Upload is ingestion, which is M3, and answers 501.
+All four are real: list, get and delete since M2/S2.5, upload since M3/S3.1.
+Upload stores and records a document and hands it to ingestion; the document is
+`pending` until the ingestion worker (M3/S3.2) exists to process it.
 
 Every route passes three separate checks, in this order, and each has its own
 answer:
@@ -32,11 +33,15 @@ from fastapi import (
 )
 
 from backend.api.dependencies.services import get_document_service
-from backend.api.not_implemented import not_implemented
 from backend.api.schemas.documents import DocumentListResponse, DocumentResponse
 from backend.security.api_security import require_permission
 from backend.security.rbac import Permission
-from backend.services.document_service import DocumentService
+from backend.services.document_service import (
+    DocumentService,
+    UploadPersistenceFailed,
+)
+from document_processing.validation import RejectionReason, UploadRejected
+from shared.interfaces.storage import StorageError
 from shared.models.document import Document
 from shared.models.principal import Principal
 
@@ -58,18 +63,76 @@ def _to_response(document: Document) -> DocumentResponse:
     )
 
 
-@router.post("/upload", response_model=DocumentResponse)
+# Which refusals get which status. 413 and 415 are the codes HTTP defines for
+# "too large" and "not a type I accept"; everything else about the content —
+# empty, unreadable, password-protected, too many pages, no usable filename — is
+# a well-formed request for something this service will not take, which is 422.
+_REJECTION_STATUS = {
+    RejectionReason.TOO_LARGE: status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+    RejectionReason.UNSUPPORTED_TYPE: status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+}
+
+
+@router.post(
+    "/upload",
+    response_model=DocumentResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        200: {
+            "description": "You already have a live document with this content (ADR-0010)."
+        },
+        413: {"description": "Larger than MAX_UPLOAD_BYTES."},
+        415: {"description": "Not a PDF, judged by its content."},
+        422: {
+            "description": "Empty, unreadable, password-protected, too many pages, or no usable filename."
+        },
+        503: {"description": "Document storage is unavailable; nothing was recorded."},
+    },
+)
 async def upload_document(
+    response: Response,
     file: UploadFile = File(...),
     principal: Principal = Depends(require_permission(Permission.DOCUMENT_WRITE)),
+    service: DocumentService = Depends(get_document_service),
 ) -> DocumentResponse:
-    """Upload and begin processing a research document — M3.
+    """Upload a PDF: 202 with the new `pending` document, or 200 with the one you have.
 
-    Authorised now so that the permission it will need is settled before its
-    body exists. Ingestion — storage (ADR-0008), parsing, chunking, the job
-    queue (ADR-0009) — is Milestone M3.
+    202, not 201, as ADR-0009 specifies: the document exists, but what makes it
+    useful — parsing and chunking — has only been accepted, not done.
+
+    The owner is the authenticated principal. The request has no field, query
+    parameter or header that could name anyone else, and anything sent under
+    such a name is not read. The client's `Content-Type` is not read either;
+    the bytes decide what the file is.
+
+    The response is the same `DocumentResponse` the other document routes
+    return. It does not include where the file is stored.
     """
-    raise not_implemented()
+    try:
+        outcome = await service.upload_and_process(
+            filename=file.filename, stream=file.file, principal=principal
+        )
+    except UploadRejected as rejection:
+        raise HTTPException(
+            status_code=_REJECTION_STATUS.get(
+                rejection.reason, status.HTTP_422_UNPROCESSABLE_ENTITY
+            ),
+            detail=rejection.message,
+        ) from rejection
+    except StorageError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document storage is unavailable. Nothing was saved.",
+        ) from exc
+    except UploadPersistenceFailed as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The document could not be saved. Nothing was kept.",
+        ) from exc
+
+    if not outcome.created:
+        response.status_code = status.HTTP_200_OK
+    return _to_response(outcome.document)
 
 
 @router.get("/", response_model=DocumentListResponse)

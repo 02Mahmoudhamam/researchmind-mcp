@@ -43,6 +43,10 @@ def _to_domain(row: DocumentORM) -> Document:
         # payload written by a newer version does not break an older reader.
         metadata=DocumentMetadata(**(row.doc_metadata or {})),
         chunk_count=row.chunk_count,
+        content_hash=row.content_hash,
+        size_bytes=row.size_bytes,
+        mime_type=row.mime_type,
+        page_count=row.page_count,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -62,6 +66,11 @@ class DocumentRepository:
         doc_type: DocumentType,
         metadata: DocumentMetadata | None = None,
         status: DocumentStatus = DocumentStatus.PENDING,
+        storage_key: str | None = None,
+        content_hash: str | None = None,
+        size_bytes: int | None = None,
+        mime_type: str | None = None,
+        page_count: int | None = None,
     ) -> Document:
         """Create a document owned by `user_id`.
 
@@ -69,6 +78,12 @@ class DocumentRepository:
         invented owner, and a check followed by an insert is a race. A malformed
         user id raises ValueError rather than silently creating nothing, because
         here it is a programming error rather than untrusted path input.
+
+        The storage fields (ADR-0008) are optional because documents without
+        stored bytes are legitimate — every row created before M3/S3.1. Upload
+        sets all five. A second live document with the same owner and content
+        hash raises the IntegrityError from `uq_documents_user_id_content_hash`
+        (ADR-0010); this does not pre-check for the same reason as above.
         """
         owner = parse_id(user_id)
         if owner is None:
@@ -80,6 +95,11 @@ class DocumentRepository:
             doc_type=doc_type,
             status=status,
             doc_metadata=(metadata or DocumentMetadata()).model_dump(mode="json"),
+            storage_key=storage_key,
+            content_hash=content_hash,
+            size_bytes=size_bytes,
+            mime_type=mime_type,
+            page_count=page_count,
         )
         self._session.add(row)
         await self._session.flush()
@@ -101,6 +121,33 @@ class DocumentRepository:
         result = await self._session.execute(
             select(DocumentORM).where(
                 DocumentORM.id == target,
+                DocumentORM.user_id == owner,
+                DocumentORM.deleted_at.is_(None),
+            )
+        )
+        row = result.scalar_one_or_none()
+        return None if row is None else _to_domain(row)
+
+    async def find_live_by_content_hash_for_user(
+        self, content_hash: str, user_id: str
+    ) -> Document | None:
+        """This user's live document with this content, if they have one.
+
+        The lookup behind ADR-0010's per-owner idempotent upload. Owner and
+        `deleted_at IS NULL` are in the WHERE clause like every other read here,
+        so it cannot answer "does *anyone* have this file" — which would be a
+        cross-tenant existence oracle — and a deleted document never counts.
+
+        A fast path, not the rule: two concurrent uploads can both miss here,
+        and the partial unique index is what stops the second insert.
+        """
+        owner = parse_id(user_id)
+        if owner is None:
+            return None
+
+        result = await self._session.execute(
+            select(DocumentORM).where(
+                DocumentORM.content_hash == content_hash,
                 DocumentORM.user_id == owner,
                 DocumentORM.deleted_at.is_(None),
             )

@@ -85,6 +85,16 @@ with the milestones that introduce them (below).
 | `LOG_LEVEL` | `INFO` |
 | `LOG_FORMAT` | `json` |
 
+### Optional — document storage and upload limits (M3/S3.1)
+
+| Variable | Default | Notes |
+|---|---|---|
+| `STORAGE_ROOT` | `uploads` | Relative to the working directory — `/app/uploads` in the image, which docker-compose.yml mounts. Uploads land at `{STORAGE_ROOT}/{user_id}/{sha256}.pdf` ([ADR-0008](../adr/0008-local-content-addressed-object-storage.md)) |
+| `MAX_UPLOAD_BYTES` | `52428800` (50 MiB) | Over it: 413. Must be positive |
+| `MAX_PDF_PAGES` | `500` | Over it: 422. Must be positive |
+
+Tests set `STORAGE_ROOT` to a per-run temporary directory in `tests/conftest.py`.
+
 ### Optional — services
 
 | Variable | Default |
@@ -157,8 +167,6 @@ Documented so the configuration surface is predictable. **Not yet present in
 
 | Variable | Milestone | Purpose | ADR |
 |---|---|---|---|
-| `STORAGE_ROOT` | M3 | Object storage root | [0008](../adr/0008-local-content-addressed-object-storage.md) |
-| `MAX_UPLOAD_BYTES`, `MAX_PDF_PAGES` | M3 | Upload validation limits | — |
 | `CHUNK_SIZE_TOKENS`, `CHUNK_OVERLAP_TOKENS` | M3 | Chunking, in tokens | [0007](../adr/0007-defer-parent-document-retrieval.md) |
 | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_BATCH_SIZE` | M4 | Embedding provider | [0004](../adr/0004-local-fastembed-embeddings.md) |
 | `RETRIEVAL_TOP_K`, `RETRIEVAL_SCORE_THRESHOLD` | M4 | Retrieval tuning | [0005](../adr/0005-provider-derived-embedding-dimension.md) |
