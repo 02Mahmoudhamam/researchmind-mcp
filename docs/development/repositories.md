@@ -9,6 +9,12 @@ the ownership-safe query the one that is easy to write.
 > **A method that can reach a user-owned row takes `user_id`, and that
 > `user_id` goes into the SQL.**
 
+**Where that `user_id` comes from** (M2/S2.5): only ever `principal.user_id`, unwrapped by
+the service from the `Principal` authentication produced. No service method accepts a
+bare `user_id` — so a repository's `user_id` parameter can trust its caller, because the
+caller could not have got the value from a request. See
+[authentication.md](authentication.md#authorisation).
+
 `docs/security/principles.md` §3 states the requirement: the ownership filter is
 "a **required parameter of the repository signature**, not an optional `filters`
 dict entry", and "the safe path must be the only path".

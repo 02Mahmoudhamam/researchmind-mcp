@@ -29,7 +29,7 @@ Principal                           ← or AuthenticationError. Never None.
 | Which routes are protected? | All of them, except an explicit allowlist |
 | Where is the allowlist? | `tests/integration/test_authentication.py::PUBLIC_PATHS` |
 | Authentication failure | **401** `Could not validate credentials` |
-| Authorisation failure | **403** — reserved for S2.5, not yet emitted |
+| Authorisation failure | **403** `You do not have permission to perform this action.` — see [Authorisation](#authorisation) |
 | Can a route see *why* authentication failed? | No. It never runs. |
 | Can a client? | No. Every failure is byte-identical. |
 | Does authentication write? | No. It reads, and never commits. |
@@ -93,8 +93,6 @@ Only `sub` is actually consumed from the token.
 |---|---|
 | **401 Unauthorized** | We do not know who you are. Missing, malformed, forged, expired, tampered, wrong-secret, unknown subject, deleted user, inactive user. |
 | **403 Forbidden** | We know who you are, and you may not do this. |
-
-Nothing emits 403 yet. RBAC is **S2.5**; `require_role` is still a stub.
 
 `HTTPBearer` is configured `auto_error=False` for this reason. Left to itself it
 raises 403 for a missing header — the right refusal under the wrong code, decided
@@ -201,8 +199,101 @@ It is **not** filtered on `is_active`, because skipping disabled accounts would
 make them answer in a different time from live ones. The service checks
 `is_active` after the password comparison.
 
+## Authorisation
+
+Added in M2/S2.5. Authentication answers *who are you*; this answers *may you*.
+
+```
+request
+  │  get_current_user            401 if there is no valid, active identity
+  ▼
+Principal (role read from PostgreSQL on this request)
+  │  require_permission(P)       403 if RBACPolicy says the role lacks P
+  ▼
+route handler
+  │  service(principal)          → principal.user_id → repository
+  ▼
+SQL ownership predicate          404 if the row is not the caller's
+```
+
+Three layers, three answers, never merged:
+
+| Layer | Question | Status | Decided by |
+|---|---|---|---|
+| Authentication | Who is this? | **401** + `WWW-Authenticate: Bearer` | `get_current_user` |
+| Authorisation | May this role do it? | **403**, no challenge header | `RBACPolicy` via `require_permission` |
+| Ownership | Is this row theirs? | **404**, identical to "does not exist" | the repository's `WHERE user_id = …` |
+
+A 403 can only follow a successful authentication — every authorisation
+dependency depends on `get_current_user` — so a missing or forged token is never
+reported as a permissions problem. Authorisation is decided from the role alone,
+before any row is looked up, so a 403 reveals nothing about whether a resource
+exists. And no permission reaches another user's rows: an administrator holds
+every permission and still gets 404 for someone else's document.
+
+### The matrix
+
+| Permission | viewer | researcher | admin |
+|---|:-:|:-:|:-:|
+| `document:read` | ✅ | ✅ | ✅ |
+| `document:write` | | ✅ | ✅ |
+| `agent:run` | | ✅ | ✅ |
+| `search:query` | ✅ | ✅ | ✅ |
+| `workspace:read` | ✅ | ✅ | ✅ |
+| `workspace:write` | | ✅ | ✅ |
+
+The administrator holds `frozenset(Permission)` — every permission, including
+any added later. The scaffold wrote this as `["*"]`; a literal wildcard is a
+value a membership check has to special-case, so it is computed instead.
+
+| Route | Permission |
+|---|---|
+| `GET /documents/`, `GET /documents/{id}` | `document:read` |
+| `POST /documents/upload`, `DELETE /documents/{id}` | `document:write` |
+| `POST /agents/run`, `GET /agents/status/{id}` | `agent:run` ¹ |
+| `POST /search/` | `search:query` |
+| `GET /workspace/sessions` | `workspace:read` |
+| `POST /workspace/sessions` | `workspace:write` |
+
+¹ An assumption: there is no `agent:read`, and a task's status only matters to a
+role that could have started one.
+
+### Why permissions at the route, not roles
+
+```python
+principal: Principal = Depends(require_permission(Permission.DOCUMENT_WRITE))
+```
+
+A route says *what it does*; the policy says *who may*. A role list at each
+route would copy the matrix into nine routers. `require_role(...)` exists for a
+check that is genuinely about identity rather than capability; nothing uses it
+yet.
+
+### Why the token's role claim is ignored
+
+`Principal.role` comes from the database row `resolve_principal` loads on every
+request. The `role` inside the JWT is never consulted. A token issued before a
+demotion still says `researcher`; the next request is authorised as whatever
+the row says now. Demotion and promotion both take effect immediately, without
+revocation infrastructure.
+
+### Adding a protected route
+
+Declare the permission. `tests/integration/test_authorization.py` compares the
+application's routes against its expected table, so a route with authentication
+but no authorisation — or a row for a route that no longer exists — fails.
+
+## Identity reaches the service as a `Principal`
+
+`DocumentService` methods take `principal: Principal`, never `user_id: str`. The
+service unwraps `principal.user_id` for the repositories, which are unchanged. A
+`Principal` is constructed in exactly one place in production code —
+`resolve_principal` — and an architecture test reads the AST to keep it that way.
+So no service can be handed an identity the server did not establish, and a
+`?user_id=` on a request has nowhere to go.
+
 ## What is still missing
 
-No RBAC and no 403 (S2.5) — `require_role` is still a stub. No password reset,
-no email verification, no MFA, no account recovery. No refresh tokens, and that
-one is by design rather than by schedule (principles.md §6).
+No password reset, no email verification, no MFA, no account recovery, no rate
+limiting on login (M9). No refresh tokens, and that one is by design rather than
+by schedule (principles.md §6).

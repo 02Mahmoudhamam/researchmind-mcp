@@ -60,6 +60,28 @@ resulting contract.
 No service method accepts a caller-supplied `user_id`. Every service method
 takes an authenticated `Principal` constructed by the shared resolver.
 
+**Enforced as of M2/S2.5:** `DocumentService` takes a `Principal`; production code
+constructs a `Principal` in exactly one place; both are asserted by
+`tests/unit/test_architecture.py`, and a request carrying `?user_id=` or an
+`X-User-Id` header is shown not to change whose documents are returned.
+
+### Authorisation rules
+
+- Authorise on **`Principal.role`**, which is read from PostgreSQL on every
+  request. **Never** on the token's `role` claim — a token outlives a demotion.
+- **401** means unauthenticated; **403** means authenticated but not permitted.
+  A 403 is only reachable after authentication succeeds, and never carries a
+  `WWW-Authenticate` header.
+- Routes require a **permission**, not a role list; the matrix lives in one place
+  (`backend/security/rbac.py`). Handlers never compare roles.
+- The policy **fails closed** on anything that is not a `UserRole` and a
+  `Permission` — including the plain string `"admin"`, which compares equal to
+  `UserRole.ADMIN`.
+- **Authorisation never substitutes for ownership.** No permission reaches
+  another user's rows; an administrator gets 404 for someone else's document.
+- A 403 is decided before any lookup, so it says nothing about whether a
+  resource exists.
+
 REST and MCP use the **same** identity resolver, so MCP cannot become a path
 around REST authentication.
 
