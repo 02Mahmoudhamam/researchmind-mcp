@@ -8,7 +8,9 @@ policy that will disagree with itself.
 Nothing here touches the database, and nothing here knows about HTTP.
 """
 
+import secrets
 import unicodedata
+from functools import lru_cache
 from typing import Annotated
 
 import bcrypt
@@ -146,10 +148,32 @@ def verify_password(raw: str, password_hash: str | None) -> bool:
     hash is never compared with `==`.
     """
     if not password_hash:
-        # No credentials on this account. S2.3 adds the column but nothing that
-        # populates it, so every existing row is in exactly this state.
+        # No credentials on this account — and the expensive answer, on purpose.
+        #
+        # Returning here immediately would make "no such account" and "account
+        # with no password" answer in under a millisecond while a real account
+        # spends the bcrypt cost, which at cost 12 is a ~280ms difference
+        # measurable over the network by anyone with a stopwatch. That is an
+        # account-enumeration oracle that no amount of identical response
+        # bodies can close.
+        #
+        # So a verification is performed against a throwaway hash of the same
+        # cost and its result discarded. Doing it *here* rather than in the
+        # caller is deliberate: a caller that forgets reintroduces the oracle,
+        # and principles.md §3 asks that the safe path be the only path.
+        _verify(raw, _absent_password_hash())
         return False
 
+    return _verify(raw, password_hash)
+
+
+def _verify(raw: str, password_hash: str) -> bool:
+    """The bcrypt comparison itself, shared by the real and throwaway paths.
+
+    One implementation so the two cost the same thing; two would eventually
+    differ by a normalisation step or an encode, and the difference would be
+    exactly the signal the throwaway path exists to hide.
+    """
     candidate = normalize_password(raw).encode("utf-8")
     if len(candidate) > MAXIMUM_BYTES:
         return False
@@ -160,7 +184,27 @@ def verify_password(raw: str, password_hash: str | None) -> bool:
         # An invalid salt, a truncated hash, a non-bcrypt string in the column,
         # or a candidate bcrypt refuses to consider. All of them mean the same
         # thing to the caller.
+        #
+        # This path *is* fast, and that is acceptable: nothing writes a
+        # malformed hash, so an attacker has no way to put a row into this
+        # state and no way to observe the difference.
         return False
+
+
+@lru_cache(maxsize=1)
+def _absent_password_hash() -> str:
+    """A hash of a random value nobody knows, built once and reused.
+
+    Random rather than a fixed string so there is no question of what happens
+    if someone submits the dummy password: no one can. Built through
+    `hash_password`, so its cost factor tracks the cost factor of real hashes —
+    a hard-coded digest would silently stop matching the moment bcrypt's
+    default moved, and the timing gap would reopen without a test failing.
+
+    Computed lazily: doing it at import would add the cost of one bcrypt round
+    to process startup, including for processes that never authenticate anyone.
+    """
+    return hash_password(secrets.token_urlsafe(32))
 
 
 # The schema-level expression of the same policy.
