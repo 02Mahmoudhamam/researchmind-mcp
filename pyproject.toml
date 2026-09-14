@@ -47,6 +47,12 @@ pyjwt = "^2.13"
 # time; there is nothing left for an abstraction layer to add here.
 bcrypt = "^4.2"
 python-multipart = "^0.0.9"
+# Declared although FastAPI already pulls it in, for the reason greenlet is: it
+# is load-bearing. Upload storage and PDF validation (M3) run blocking calls in
+# worker threads through `anyio.to_thread.run_sync`, which ADR-0009 names, and a
+# direct import of an undeclared transitive dependency breaks the day the
+# framework stops needing it.
+anyio = "^4.0"
 structlog = "^24.2.0"
 httpx = "^0.27.0"
 
