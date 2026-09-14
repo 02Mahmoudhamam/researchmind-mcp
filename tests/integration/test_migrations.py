@@ -34,6 +34,9 @@ EXPECTED_CONSTRAINTS = {
     "ck_documents_chunk_count_non_negative",
     "ck_documents_document_type",
     "ck_documents_document_status",
+    # M3/S3.1 (migration 0003)
+    "ck_documents_size_bytes_positive",
+    "ck_documents_page_count_positive",
     "pk_document_chunks",
     "fk_document_chunks_document_id_documents",
     "uq_document_chunks_document_id_chunk_index",
@@ -92,6 +95,22 @@ class TestSchemaProducedByMigration:
         a migration stops being reversible.
         """
         assert await _names(CONSTRAINTS_SQL) == EXPECTED_CONSTRAINTS
+
+    async def test_one_live_document_per_owner_per_content(self) -> None:
+        """ADR-0010's rule, read from pg_indexes rather than from the ORM.
+
+        Unique, on (user_id, content_hash), and partial on `deleted_at IS NULL`
+        — without the predicate, deleting a document would block uploading the
+        same file ever again.
+        """
+        definition = await _scalar(
+            "SELECT indexdef FROM pg_indexes "
+            "WHERE indexname = 'uq_documents_user_id_content_hash'"
+        )
+
+        assert definition.startswith("CREATE UNIQUE INDEX")
+        assert "(user_id, content_hash)" in definition
+        assert "WHERE (deleted_at IS NULL)" in definition
 
     async def test_the_documents_index_is_partial_on_not_deleted(self) -> None:
         """The predicate is the point: soft-deleted rows are never listed."""
@@ -224,5 +243,5 @@ class TestLifecycle:
         result = alembic("heads")
 
         assert result.returncode == 0, result.stderr
-        assert "0002" in result.stdout
+        assert "0003" in result.stdout
         assert result.stdout.count("(head)") == 1, "more than one head — branched"
