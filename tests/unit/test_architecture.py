@@ -235,3 +235,107 @@ class TestAuthenticationCannotReturnToAFailOpenContract:
         ]
 
         assert not offenders, offenders
+
+
+class TestPasslibIsGone:
+    """M2/S2.3 removed it. These make the removal stay removed.
+
+    passlib was declared from the scaffold onward and never imported, so this
+    is not the removal of something load-bearing — it is closing a door. Left
+    installed, it selects a hashing backend at import time and falls through to
+    stdlib `crypt` when no bcrypt backend is present; `crypt` was removed in
+    Python 3.13. A password library that silently changes algorithm depending
+    on what else is installed is the wrong shape for this particular boundary.
+    """
+
+    PRODUCTION = [
+        path
+        for directory in (
+            "backend",
+            "shared",
+            "agents",
+            "document_processing",
+            "vector_db",
+            "memory_system",
+            "mcp_server",
+            "devops",
+            "alembic",
+        )
+        for path in sorted((ROOT / directory).rglob("*.py"))
+        if "__pycache__" not in path.parts
+    ]
+
+    def test_it_is_not_importable(self) -> None:
+        """The behavioural check, and the one that cannot be fooled.
+
+        Grepping for `import passlib` proves nobody wrote the line. This proves
+        the package is not in the environment at all, so a line added later
+        fails rather than quietly working.
+        """
+        import importlib.util
+
+        assert importlib.util.find_spec("passlib") is None
+
+    def test_no_production_module_imports_it(self) -> None:
+        offenders = [
+            f"{path.relative_to(ROOT)}"
+            for path in self.PRODUCTION
+            if "passlib" in path.read_text(encoding="utf-8")
+        ]
+
+        assert not offenders, offenders
+
+    def test_no_crypt_context_survives_anywhere(self) -> None:
+        """passlib's entry point. Its absence is what "no dead compatibility code" means."""
+        offenders = [
+            f"{path.relative_to(ROOT)}"
+            for path in self.PRODUCTION
+            if "CryptContext" in path.read_text(encoding="utf-8")
+        ]
+
+        assert not offenders, offenders
+
+    def test_it_is_not_a_declared_dependency(self) -> None:
+        """The declaration, not the word.
+
+        pyproject.toml explains in a comment why bcrypt replaced passlib, and
+        that explanation is worth keeping — so this looks for the dependency
+        line rather than any mention.
+        """
+        declarations = [
+            line
+            for line in (ROOT / "pyproject.toml")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.strip().startswith("passlib")
+        ]
+
+        assert not declarations, declarations
+
+    def test_it_is_not_in_the_lock_file(self) -> None:
+        """A dependency removed from pyproject but left in the lock still installs."""
+        assert 'name = "passlib"' not in (ROOT / "poetry.lock").read_text(
+            encoding="utf-8"
+        )
+
+
+class TestHashingHasOneImplementation:
+    """The policy is only centralised if the primitive is."""
+
+    def test_bcrypt_is_a_declared_direct_dependency(self) -> None:
+        """Not relied on transitively. Nothing else in the tree pulls it."""
+        assert "bcrypt = " in (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+    def test_only_the_passwords_module_touches_bcrypt(self) -> None:
+        """A second call site is a second set of decisions about cost and salt.
+
+        Scoped to production code: `tests/unit/test_passwords.py` imports bcrypt
+        deliberately, to pin the library's own truncation behaviour.
+        """
+        offenders = [
+            f"{path.relative_to(ROOT)}"
+            for path in TestPasslibIsGone.PRODUCTION
+            if path.name != "passwords.py" and "bcrypt" in _statements(path).lower()
+        ]
+
+        assert not offenders, offenders
