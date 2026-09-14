@@ -35,7 +35,17 @@ langchain-text-splitters = "^0.2.0"
 # already present transitively via redis, so declaring it directly adds nothing
 # to the image while removing ecdsa, rsa and pyasn1 from the tree.
 pyjwt = "^2.13"
-passlib = "^1.7.4"
+# bcrypt directly, not passlib. passlib has been a declared dependency since the
+# scaffold and was never imported — and left to itself it would have selected a
+# backend at import time, silently falling through to stdlib `crypt`, which was
+# removed in Python 3.13. A password-hashing library that quietly changes
+# algorithm depending on what is installed is the wrong shape for the one
+# security boundary that must be predictable.
+#
+# The bcrypt package is a thin binding over the reference implementation. It
+# generates the salt, encodes the cost in the hash, and compares in constant
+# time; there is nothing left for an abstraction layer to add here.
+bcrypt = "^4.2"
 python-multipart = "^0.0.9"
 structlog = "^24.2.0"
 httpx = "^0.27.0"
