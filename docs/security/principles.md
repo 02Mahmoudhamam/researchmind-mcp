@@ -119,6 +119,12 @@ See [ADR-0008](../adr/0008-local-content-addressed-object-storage.md).
 **Uploads are validated before they are stored** — magic-byte MIME sniffing
 (never the client `Content-Type`), size cap, page cap, encrypted-PDF rejection.
 
+*Enforced since M3/S3.1* (`document_processing/validation.py`). "Encrypted" is
+interpreted as **cannot be opened without a password**: an owner-password-only
+PDF opens and reads normally and is accepted. The owner of an upload is
+`principal.user_id` and nothing else — see
+[../development/uploads.md](../development/uploads.md).
+
 ## 5. Citations are resolved server-side
 
 Citation metadata — document, page, section — is resolved from PostgreSQL,

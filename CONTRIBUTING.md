@@ -16,6 +16,7 @@ Read first:
 - [docs/development/repositories.md](docs/development/repositories.md) — the data-access boundary and how ownership is enforced
 - [docs/development/transactions.md](docs/development/transactions.md) — the service layer and who owns commit
 - [docs/development/authentication.md](docs/development/authentication.md) — how a request acquires an identity, and why a route cannot skip it
+- [docs/development/uploads.md](docs/development/uploads.md) — upload validation, content-addressed storage, duplicates, and the ingestion hand-off
 - [docs/adr/](docs/adr/) — why the system is shaped this way
 - [docs/security/principles.md](docs/security/principles.md) — non-negotiable invariants
 
