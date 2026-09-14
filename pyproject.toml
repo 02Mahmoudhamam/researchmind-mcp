@@ -25,7 +25,7 @@ greenlet = "^3.0.0"
 # against production, so it must be present in the runtime image.
 alembic = "^1.13"
 qdrant-client = "^1.10.0"
-redis = "^5.0.0"
+redis = ">=5,<9"
 pymupdf = "^1.24.0"
 langchain-text-splitters = "^0.2.0"
 # PyJWT rather than python-jose. Both were patched at the versions pinned here,
