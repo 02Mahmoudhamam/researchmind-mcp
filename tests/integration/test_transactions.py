@@ -22,6 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.repositories import DocumentRepository, UserRepository
 from backend.services.document_service import DocumentService
 from shared.models.document import DocumentType
+from shared.models.principal import Principal
+from shared.models.user import User
 
 pytestmark = [
     pytest.mark.db,
@@ -42,6 +44,16 @@ async def _email() -> str:
     return f"{uuid.uuid4()}@example.com"
 
 
+def _principal(user: User) -> Principal:
+    """The identity DocumentService receives since M2/S2.5.
+
+    Built from the real row the test just created. Only `user_id` reaches the
+    repository, so these tests exercise exactly the transaction behaviour they
+    did before; the argument changed type, not meaning.
+    """
+    return Principal(user_id=user.id, email=user.email, role=user.role)
+
+
 class TestSuccessfulCommit:
     async def test_a_committed_delete_is_visible_to_another_session(
         self, committing_session: AsyncSession
@@ -56,7 +68,7 @@ class TestSuccessfulCommit:
         await committing_session.commit()
 
         deleted = await DocumentService(committing_session).delete_document(
-            document.id, user.id
+            document.id, _principal(user)
         )
 
         assert deleted is True
@@ -79,7 +91,7 @@ class TestSuccessfulCommit:
         )
 
         deleted = await DocumentService(committing_session).delete_document(
-            str(uuid.uuid4()), user.id
+            str(uuid.uuid4()), _principal(user)
         )
 
         assert deleted is False
@@ -114,7 +126,7 @@ class TestRollbackAfterFailure:
 
         with pytest.raises(RuntimeError):
             await DocumentService(committing_session).delete_document(
-                document.id, user.id
+                document.id, _principal(user)
             )
 
         monkeypatch.undo()
@@ -147,7 +159,7 @@ class TestRollbackAfterFailure:
         monkeypatch.setattr(committing_session, "commit", exploding_commit)
         with pytest.raises(RuntimeError):
             await DocumentService(committing_session).delete_document(
-                document.id, user.id
+                document.id, _principal(user)
             )
         monkeypatch.undo()
 

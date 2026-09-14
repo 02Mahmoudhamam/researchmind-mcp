@@ -106,7 +106,7 @@ Rationale for every structural choice is in [docs/adr/](docs/adr/).
 | **Auth** | JWT (`PyJWT`, HS256 pinned at decode, 60-minute access tokens, no refresh) · bcrypt password hashing · fail-closed `get_current_user` |
 | **Frontend** | Next.js 14 (App Router) · React 18 · TypeScript · Tailwind · TanStack Query · Zustand · axios |
 | **Testing** | pytest · pytest-asyncio · testcontainers · httpx · gitleaks |
-| **Quality** | ruff · black *(both enforced in CI)* · mypy strict *(runs; enforced from M2)* |
+| **Quality** | ruff · black *(both enforced in CI)* · mypy strict *(enforced in CI over the M2 security surface; not yet repository-wide)* |
 | **Infrastructure** | Docker · Docker Compose · GitHub Actions · Dependabot |
 
 Embeddings run **locally**, so a full stack needs exactly one secret:
@@ -153,8 +153,8 @@ Embeddings run **locally**, so a full stack needs exactly one secret:
 
 | Area | State |
 |---|---|
-| **REST endpoints** | ⚠️ `/auth/register`, `/auth/login` and `/health` work. The 9 protected routes enforce authentication but their bodies are still `...` — they wait on M3 and M2/S2.5 |
-| **Authentication** | ✅ **Fail-closed (M2/S2.2–S2.4).** Register and log in over HTTP; a forged, expired, tampered or unresolvable token is 401 on every protected route. **Authorisation (RBAC) is not implemented** — M2/S2.5 |
+| **REST endpoints** | ⚠️ Auth, `/health`, and document **list / get / delete** work. Upload, search, agents and workspace are authorised but answer **501** — they wait on M3–M5 |
+| **Authentication & authorisation** | ✅ **M2 complete.** Register and log in over HTTP; a forged, expired or unresolvable token is **401** on every protected route; a role without the permission is **403**; another user's document is **404** whatever your role |
 | **MCP layer** | ⚠️ Imports correctly and lists its 7 tools; no tool handler is implemented yet (M6) |
 | **RAG pipeline** | ❌ 1 of 17 stages implemented |
 | **Persistence** | ⚠️ Schema, ownership-scoped repositories and `DocumentService` (M1/S1.2–S1.4). Only the auth routes use them so far; document bodies wait on M3 |
@@ -229,10 +229,10 @@ functional. Commands are not documented here before they work.
 ## Testing
 
 ```bash
-poetry run pytest                       # ✅ 3 passed, 2 xfailed
+poetry run pytest                       # ✅ 570 passed, 2 xfailed
 poetry run ruff check .                 # ✅ enforced in CI
 poetry run black --check .              # ✅ enforced in CI
-poetry run mypy .                       # ⚠️ runs, but 149 errors — not enforced until M2
+poetry run mypy .                       # ⚠️ 121 errors repo-wide; strict-clean and CI-enforced over the M2 security surface
 ./scripts/check-hygiene.sh              # ✅ enforced in CI
 ```
 
@@ -260,7 +260,7 @@ Full detail: [docs/development/workflow.md](docs/development/workflow.md).
 |---|---|
 | **M0** | Build integrity — images build, imports resolve, CI green |
 | **M1** | System of record — Postgres, repositories, migrations |
-| **M2** | Fail-closed authentication *(S2.1–S2.4 done; S2.5 RBAC remaining)* |
+| **M2** | Fail-closed authentication and authorisation *(complete — S2.1–S2.5)* |
 | **M3** | Document ingestion — PDF to owned, section-aware chunks |
 | **M4** | Tenant-isolated retrieval |
 | **M5** | **Grounded answering — first working end-to-end flow** |
@@ -277,11 +277,12 @@ Full detail: [docs/development/workflow.md](docs/development/workflow.md).
 
 ## Security
 
-Authentication is **fail-closed** as of M2/S2.2–S2.4: accounts are created and
-signed into over HTTP, and every protected route refuses a token it cannot
-resolve to an active user. **Authorisation is not implemented** — every
-authenticated user is equally privileged until M2/S2.5 — and the system is
-pre-alpha, so it must still not be exposed to an untrusted network. Principles
+Authentication and authorisation are **fail-closed** as of M2: accounts are
+created and signed into over HTTP, every protected route refuses a token it
+cannot resolve to an active user (401), refuses a role that lacks the permission
+(403), and scopes every document to its owner in the SQL itself (404). There is
+still **no rate limiting** (M9), and the system is pre-alpha, so it must not be
+exposed to an untrusted network. Principles
 and invariants: [docs/security/principles.md](docs/security/principles.md).
 To report a vulnerability, see [SECURITY.md](SECURITY.md) — please report
 privately.

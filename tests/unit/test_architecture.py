@@ -227,13 +227,31 @@ class TestAuthenticationCannotReturnToAFailOpenContract:
         pinning. It would be a lie that reads as documentation.
         """
         routers = sorted((ROOT / "backend" / "api" / "routers").glob("*.py"))
-        offenders = [
-            f"{path.name}:{number}"
+        # Every way a route can obtain an identity. Until M2/S2.5 routes wrote
+        # `Depends(get_current_user)` directly; since then they write
+        # `Depends(require_permission(...))`, and a check that only knew the
+        # first spelling passed on zero lines — guarding nothing, silently.
+        guards = (
+            "Depends(get_current_user)",
+            "Depends(require_permission(",
+            "Depends(require_role(",
+        )
+        inspected = [
+            (path.name, number, line)
             for path in routers
             for number, line in enumerate(_code(path).splitlines(), start=1)
-            if "Depends(get_current_user)" in line and "Principal" not in line
+            if any(guard in line for guard in guards)
+        ]
+        offenders = [
+            f"{name}:{number}"
+            for name, number, line in inspected
+            if "Principal" not in line
         ]
 
+        # Non-vacuity. Nine protected routes, so at least nine guarded lines; a
+        # renamed dependency that no spelling above matches fails here instead
+        # of letting the assertion below pass on an empty list.
+        assert len(inspected) >= 9, f"only {len(inspected)} guarded route lines found"
         assert not offenders, offenders
 
 
@@ -339,3 +357,101 @@ class TestHashingHasOneImplementation:
         ]
 
         assert not offenders, offenders
+
+
+class TestIdentityReachesTheServiceAsAPrincipal:
+    """principles.md §2: no service method accepts a caller-supplied `user_id`.
+
+    M2/S2.5 moved `DocumentService` from `user_id: str` to `principal: Principal`.
+    These keep it moved, and keep the `Principal` that arrives there honest.
+    """
+
+    def test_no_document_service_method_takes_a_user_id(self) -> None:
+        """A bare string identity is exactly what a route could fill from a request."""
+        import inspect
+
+        from backend.services.document_service import DocumentService
+
+        methods = [
+            (name, member)
+            for name, member in inspect.getmembers(DocumentService, inspect.isfunction)
+            if not name.startswith("_")
+        ]
+        offenders = [
+            name
+            for name, member in methods
+            if "user_id" in inspect.signature(member).parameters
+        ]
+
+        assert len(methods) == 4, [name for name, _ in methods]
+        assert not offenders, offenders
+
+    def test_every_document_service_method_requires_a_principal(self) -> None:
+        import inspect
+        import typing
+
+        from backend.services.document_service import DocumentService
+        from shared.models.principal import Principal
+
+        for name, member in inspect.getmembers(DocumentService, inspect.isfunction):
+            if name.startswith("_"):
+                continue
+            hints = typing.get_type_hints(member)
+            assert (
+                hints.get("principal") is Principal
+            ), f"{name} does not take a Principal"
+
+    def test_production_code_constructs_a_principal_in_exactly_one_place(self) -> None:
+        """The resolver is the trusted construction point; nothing else may mint one.
+
+        Read from the AST, so the class definition and prose mentioning the
+        name are not mistaken for construction. A `Principal(...)` call anywhere
+        else in production code would be a second identity source — one that
+        need not have verified a token.
+        """
+        import ast
+
+        production = [
+            path
+            for directory in ("backend", "shared", "mcp_server", "agents")
+            for path in sorted((ROOT / directory).rglob("*.py"))
+            if "__pycache__" not in path.parts
+        ]
+        constructors = [
+            f"{path.relative_to(ROOT)}:{node.lineno}"
+            for path in production
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "Principal"
+        ]
+
+        assert len(constructors) == 1, constructors
+        assert constructors[0].startswith("backend/security/authentication.py:")
+
+
+class TestAuthorisationIsDecidedInOnePlace:
+    """Brief §6: no `if principal.role == ...` spread across handlers."""
+
+    ROUTERS = sorted((ROOT / "backend" / "api" / "routers").glob("*.py"))
+
+    @pytest.mark.parametrize("path", ROUTERS, ids=lambda p: p.name)
+    def test_no_router_inspects_a_role(self, path: pathlib.Path) -> None:
+        """A role comparison in a handler is a second, unreviewed copy of the policy."""
+        code = _statements(path)
+
+        assert "UserRole" not in code
+        assert ".role" not in code
+
+    @pytest.mark.parametrize("path", SERVICES, ids=lambda p: p.name)
+    def test_no_service_inspects_a_role(self, path: pathlib.Path) -> None:
+        """Services scope by ownership; which roles may call them is the route's guard."""
+        assert ".role ==" not in _statements(path)
+        assert "has_permission" not in _statements(path)
+
+    def test_the_policy_imports_no_web_framework(self) -> None:
+        """So the MCP adapter can ask the same question (ADR-0002 §6)."""
+        code = _statements(ROOT / "backend" / "security" / "rbac.py")
+
+        assert "fastapi" not in code
+        assert "starlette" not in code

@@ -1,12 +1,23 @@
-"""API-level security — the HTTP adapter over the identity resolver.
+"""API-level security — the HTTP adapter over authentication and authorisation.
 
-Everything HTTP-shaped about authentication lives here: header parsing, the
-status code, the challenge. The decision itself lives in
-``backend.security.authentication``, so the MCP adapter can make the same one
-without inheriting FastAPI (ADR-0002 §6).
+Everything HTTP-shaped about both lives here: header parsing, status codes, the
+challenge. The decisions live elsewhere — identity in
+``backend.security.authentication``, permission in ``backend.security.rbac`` —
+so the MCP adapter can make the same decisions without inheriting FastAPI
+(ADR-0002 §6).
+
+The two status codes answer two different questions and must never be swapped:
+
+    401  we do not know who you are      authentication failed; retry with credentials
+    403  we know, and you may not        authenticated, but not permitted
+
+A 403 is only ever raised *after* ``get_current_user`` has returned a Principal,
+because every authorisation dependency below depends on it. There is no path to
+a 403 without first passing authentication, and so no way for a missing or
+forged token to be reported as a permissions problem.
 """
 
-from typing import Annotated, Awaitable, Callable
+from typing import Annotated
 
 from fastapi import Depends, HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -15,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.api.dependencies.database import get_db_session
 from backend.db.repositories import UserRepository
 from backend.security.authentication import AuthenticationError, resolve_principal
+from backend.security.rbac import Permission, RBACPolicy
 from shared.models.principal import Principal
 from shared.models.user import UserRole
 
@@ -93,21 +105,102 @@ async def get_current_user(
         raise unauthenticated() from exc
 
 
-def require_role(
-    *roles: UserRole,
-) -> Callable[..., Awaitable[Principal]]:
-    """FastAPI dependency factory — enforces role requirements.
+# One message for every refusal. It says access was refused and nothing about
+# why: naming the permission that was missing, or the role that would have had
+# it, describes the policy to anyone probing it (principles.md §7).
+_FORBIDDEN_DETAIL = "You do not have permission to perform this action."
 
-    Still a stub, and deliberately so: authorisation is M2/S2.5. Retyped to
-    ``Principal`` here only because ``get_current_user`` no longer returns a
-    ``User``, and an annotation that lies is worse than one that is absent.
 
-    When it is implemented it must raise **403**, not 401 — the caller has been
-    authenticated by then, and the two codes answer different questions.
+def forbidden() -> HTTPException:
+    """The single 403 every authorisation failure produces.
+
+    No ``WWW-Authenticate`` header, deliberately. That header invites the client
+    to authenticate, and this caller already has — sending different
+    credentials is not the remedy, and the header would suggest it is.
+    """
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN, detail=_FORBIDDEN_DETAIL
+    )
+
+
+class RequirePermission:
+    """Dependency: the authenticated Principal, if its role holds a permission.
+
+    This is how routes are authorised. A route declares *what it does* — read a
+    document, run an agent — and the policy decides which roles may do that, in
+    one place. The alternative, a role list at every route, would copy the
+    matrix in ``rbac.py`` into nine routers, and the copies would drift the
+    first time the matrix changed.
+
+    A class rather than a closure so the permission a route requires is
+    readable from the route itself. The route-coverage test walks the
+    application's dependency tree, finds these, and checks every protected
+    route against the expected matrix — which a closure named ``_check`` would
+    not let it do.
     """
 
-    async def _check(
-        principal: Principal = Depends(get_current_user),
-    ) -> Principal: ...  # TODO: implement — M2/S2.5
+    def __init__(self, permission: Permission) -> None:
+        if not isinstance(permission, Permission):
+            # At import, when a router is defined — not at the first request.
+            raise TypeError(f"expected a Permission, got {type(permission).__name__}")
+        self.permission = permission
+        self._policy = RBACPolicy()
 
-    return _check
+    async def __call__(
+        self, principal: Annotated[Principal, Depends(get_current_user)]
+    ) -> Principal:
+        # `principal.role` is the database's current answer, resolved on this
+        # request by `resolve_principal`. The token's own role claim never
+        # reaches this line, so a demotion takes effect on the next request
+        # rather than at token expiry.
+        if not self._policy.has_permission(principal.role, self.permission):
+            raise forbidden()
+        return principal
+
+
+class RequireRole:
+    """Dependency: the authenticated Principal, if its role is one of these.
+
+    For the rare check that genuinely is about *who* rather than *what* — an
+    administrative operation that no permission describes. No route in the
+    application needs one today: all nine protected routes are authorised by
+    permission. It exists because the scaffold declared it and because the
+    first administrative route should not have to invent it.
+    """
+
+    def __init__(self, roles: frozenset[UserRole]) -> None:
+        if not roles:
+            # An empty set would refuse everyone, which fails closed but is
+            # certainly a mistake — better reported when the router is defined.
+            raise ValueError("require_role needs at least one role")
+        if not all(isinstance(role, UserRole) for role in roles):
+            raise TypeError("require_role accepts UserRole members only")
+        self.roles = roles
+
+    async def __call__(
+        self, principal: Annotated[Principal, Depends(get_current_user)]
+    ) -> Principal:
+        if principal.role not in self.roles:
+            raise forbidden()
+        return principal
+
+
+def require_permission(permission: Permission) -> RequirePermission:
+    """FastAPI dependency factory — the permission check routes use.
+
+    ``principal: Principal = Depends(require_permission(Permission.DOCUMENT_READ))``
+
+    No token or a bad one: 401, from ``get_current_user``, before the policy is
+    consulted. Authenticated without the permission: 403. Otherwise the
+    Principal, exactly as authentication produced it.
+    """
+    return RequirePermission(permission)
+
+
+def require_role(*roles: UserRole) -> RequireRole:
+    """FastAPI dependency factory — enforces role requirements.
+
+    Same 401/403 contract as ``require_permission``. Prefer that one: a role
+    check hard-codes today's answer to "who may do this" at the call site.
+    """
+    return RequireRole(frozenset(roles))

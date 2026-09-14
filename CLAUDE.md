@@ -125,10 +125,10 @@ stub returns the right type). There is **no RAG evaluation of any kind**.
 | Repositories | [backend/db/repositories/](backend/db/repositories/) | **Complete (M1/S1.3)** — user, document, chunk; ownership in the SQL, not in a Python check |
 | Settings | [backend/config/settings.py](backend/config/settings.py) | **Complete** (insecure secret defaults); validates `DATABASE_URL` uses the asyncpg driver |
 | DB infrastructure | [backend/db/](backend/db/) | **Complete (M1/S1.1)** — `Base` + naming convention, lazy async engine, session factory. **No models, no migrations** |
-| API routers | [backend/api/routers/](backend/api/routers/) | `auth` (register, login) and `health` implemented; the other 9 protected routes enforce authentication but have `TODO` bodies |
+| API routers | [backend/api/routers/](backend/api/routers/) | `auth`, `health`, and documents list/get/delete implemented. All 9 protected routes are authorised by permission; upload, search, agents and workspace answer **501** |
 | API schemas | [backend/api/schemas/](backend/api/schemas/) | **Complete** |
-| Services | [backend/services/](backend/services/) | `DocumentService` reads/deletes via repositories and owns the transaction (M1/S1.4); `upload_and_process` is M3. **`AuthService` complete (M2/S2.4)** — register and login, bcrypt, JWT issuance. `SearchService` (M4) still a stub |
-| Security | [backend/security/](backend/security/) | `jwt_handler` complete (M2/S2.1); `authentication` + `get_current_user` complete and fail-closed (M2/S2.2); `passwords` complete — bcrypt, 12-char/72-byte policy, NFKC (M2/S2.3). `rbac.py` still stubs — S2.5 |
+| Services | [backend/services/](backend/services/) | `DocumentService` reads/deletes via repositories and owns the transaction (M1/S1.4); `upload_and_process` is M3. Every method takes a **`Principal`, never a `user_id`** (M2/S2.5). **`AuthService` complete (M2/S2.4)** — register and login, bcrypt, JWT issuance. `SearchService` (M4) still a stub |
+| Security | [backend/security/](backend/security/) | `jwt_handler` complete (M2/S2.1); `authentication` + `get_current_user` complete and fail-closed (M2/S2.2); `passwords` complete — bcrypt, 12-char/72-byte policy, NFKC (M2/S2.3); **`rbac` + `require_permission` / `require_role` complete (M2/S2.5)** — 401 vs 403, role read fresh from the DB |
 | RAG pipeline | [document_processing/](document_processing/) | **All stubs** |
 | Vector store | [vector_db/qdrant/](vector_db/qdrant/) | Client + config complete; repository all stubs |
 | Memory | [memory_system/redis/](memory_system/redis/) | Client + config complete; store stubbed **and orphaned** |
@@ -138,7 +138,7 @@ stub returns the right type). There is **no RAG evaluation of any kind**.
 | Health/metrics | [devops/monitoring/health.py](devops/monitoring/health.py) | **Router never mounted** |
 
 ### Orphaned code — defined, zero references anywhere
-`RedisMemoryStore`, `require_role`, the health router,
+`RedisMemoryStore`, the health router,
 `devops/logging/logging_config.py` (duplicate of `shared/utils/logger.py`), and **8 of the
 9 agents** (only `OrchestratorAgent` is ever instantiated).
 
@@ -173,9 +173,11 @@ Edges that **do not exist** despite being documented:
   every method that can reach an owned row **and present in the SQL predicate**.
   `DocumentService` is wired to those repositories (M1/S1.4) and owns the transaction: it
   commits, repositories only flush. Authentication above it is real as of M2/S2.2: every
-  protected route now resolves a `Principal` or returns 401. What is still missing is the
-  layer between — **router bodies are still `...`**, and `DocumentService` still takes a
-  `user_id` rather than a `Principal` (S2.5). So nothing persists over HTTP yet, and there
+  protected route now resolves a `Principal` or returns 401, and is authorised by
+  permission or returns 403 (M2/S2.5). `DocumentService` receives that `Principal` and
+  unwraps `principal.user_id` for the unchanged repositories, and the document list, get
+  and delete routes use it — so documents are readable and deletable over HTTP, though
+  nothing can yet *create* one over HTTP (upload is M3). And
   tokens are obtained over HTTP as of M2/S2.4: `POST /api/v1/auth/register`
   creates an account and `POST /api/v1/auth/login` issues a 60-minute access
   token that `get_current_user` accepts. `SearchService` remains a stub (M4).
@@ -219,11 +221,11 @@ Qdrant will fail.
   pass and run on every push and PR via `.github/workflows/ci-backend.yml`, alongside
   `poetry check`, `poetry check --lock`, a runtime `import mcp` assertion and `pytest`.
   Frontend lint/type-check/build are enforced by `ci-frontend.yml`.
-  **`mypy --strict` is the exception** — configured and runnable (S0.5 fixed the
-  module-path defect that made it abort before checking anything), but **not enforced**:
-  it reports **149 errors in 66 files, 54 of them `empty-body`** — the stubs that declare
-  a non-`Optional` return and then `...`. Promoted at **M2**, per the schedule in that
-  workflow's header.
+  **`mypy --strict` is enforced over the M2 security surface only** (M2/S2.5): the 16
+  files M2 made real — authentication, authorisation, passwords, tokens, register/login —
+  pass strict with no ignores, and CI fails if they stop. Repository-wide `mypy .` still
+  reports **121 errors**, mostly `empty-body` in M3–M6 stubs, and is not enforced; each
+  milestone adds the files it makes real to the list in `ci-backend.yml`.
 
 ---
 

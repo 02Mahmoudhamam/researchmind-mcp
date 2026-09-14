@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.repositories import DocumentRepository, UserRepository
 from backend.services.document_service import DocumentService
 from shared.models.document import Document, DocumentMetadata, DocumentType
+from shared.models.principal import Principal
 
 pytestmark = [
     pytest.mark.db,
@@ -25,16 +26,21 @@ pytestmark = [
 ]
 
 
-async def _user(session: AsyncSession, name: str = "Ada") -> str:
+async def _user(session: AsyncSession, name: str = "Ada") -> Principal:
+    """A real user, returned as the Principal the service receives (M2/S2.5).
+
+    Built from the created row rather than invented, so the identity handed to
+    the service is one that actually exists. Only `user_id` reaches the SQL.
+    """
     user = await UserRepository(session).create(
         email=f"{uuid.uuid4()}@example.com", full_name=name
     )
-    return user.id
+    return Principal(user_id=user.id, email=user.email, role=user.role)
 
 
-async def _document(session: AsyncSession, user_id: str, filename: str) -> str:
+async def _document(session: AsyncSession, owner: Principal, filename: str) -> str:
     document = await DocumentRepository(session).create(
-        user_id=user_id, filename=filename, doc_type=DocumentType.PDF
+        user_id=owner.user_id, filename=filename, doc_type=DocumentType.PDF
     )
     return document.id
 
@@ -43,11 +49,11 @@ class TestReads:
     async def test_get_returns_the_owned_document(
         self, committing_session: AsyncSession
     ) -> None:
-        user_id = await _user(committing_session)
-        document_id = await _document(committing_session, user_id, "paper.pdf")
+        owner = await _user(committing_session)
+        document_id = await _document(committing_session, owner, "paper.pdf")
         service = DocumentService(committing_session)
 
-        found = await service.get_document(document_id, user_id)
+        found = await service.get_document(document_id, owner)
 
         assert isinstance(found, Document)
         assert found.filename == "paper.pdf"
@@ -69,11 +75,11 @@ class TestReads:
         self, committing_session: AsyncSession
     ) -> None:
         """The API/domain/ORM boundary survives the service layer."""
-        user_id = await _user(committing_session)
-        document_id = await _document(committing_session, user_id, "p.pdf")
+        owner = await _user(committing_session)
+        document_id = await _document(committing_session, owner, "p.pdf")
         service = DocumentService(committing_session)
 
-        found = await service.get_document(document_id, user_id)
+        found = await service.get_document(document_id, owner)
 
         assert found is not None
         assert not hasattr(found, "_sa_instance_state")
@@ -140,23 +146,23 @@ class TestSoftDelete:
     async def test_delete_hides_the_document_from_both_read_paths(
         self, committing_session: AsyncSession
     ) -> None:
-        user_id = await _user(committing_session)
-        document_id = await _document(committing_session, user_id, "d.pdf")
+        owner = await _user(committing_session)
+        document_id = await _document(committing_session, owner, "d.pdf")
         service = DocumentService(committing_session)
 
-        assert await service.delete_document(document_id, user_id) is True
+        assert await service.delete_document(document_id, owner) is True
 
-        assert await service.get_document(document_id, user_id) is None
-        assert await service.list_user_documents(user_id) == []
+        assert await service.get_document(document_id, owner) is None
+        assert await service.list_user_documents(owner) == []
 
     async def test_delete_is_soft_and_the_row_survives(
         self, committing_session: AsyncSession
     ) -> None:
         """ADR-0003 needs the row: M4 reconciles Qdrant against it."""
-        user_id = await _user(committing_session)
-        document_id = await _document(committing_session, user_id, "d.pdf")
+        owner = await _user(committing_session)
+        document_id = await _document(committing_session, owner, "d.pdf")
 
-        await DocumentService(committing_session).delete_document(document_id, user_id)
+        await DocumentService(committing_session).delete_document(document_id, owner)
 
         row = await committing_session.execute(
             text("SELECT deleted_at FROM documents WHERE id = :id"),
@@ -167,12 +173,12 @@ class TestSoftDelete:
     async def test_deleting_twice_reports_false_the_second_time(
         self, committing_session: AsyncSession
     ) -> None:
-        user_id = await _user(committing_session)
-        document_id = await _document(committing_session, user_id, "d.pdf")
+        owner = await _user(committing_session)
+        document_id = await _document(committing_session, owner, "d.pdf")
         service = DocumentService(committing_session)
 
-        assert await service.delete_document(document_id, user_id) is True
-        assert await service.delete_document(document_id, user_id) is False
+        assert await service.delete_document(document_id, owner) is True
+        assert await service.delete_document(document_id, owner) is False
 
 
 class TestNotImplementedSurface:
@@ -185,5 +191,6 @@ class TestNotImplementedSurface:
         work". Storage is ADR-0008 and the pipeline is ADR-0009, both M3.
         """
         service = DocumentService(committing_session)
+        owner = await _user(committing_session)
 
-        assert await service.upload_and_process(None, "irrelevant") is None  # type: ignore[arg-type]
+        assert await service.upload_and_process(None, owner) is None  # type: ignore[arg-type]
