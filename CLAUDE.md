@@ -125,9 +125,9 @@ stub returns the right type). There is **no RAG evaluation of any kind**.
 | Repositories | [backend/db/repositories/](backend/db/repositories/) | **Complete (M1/S1.3)** — user, document, chunk; ownership in the SQL, not in a Python check |
 | Settings | [backend/config/settings.py](backend/config/settings.py) | **Complete** (insecure secret defaults); validates `DATABASE_URL` uses the asyncpg driver |
 | DB infrastructure | [backend/db/](backend/db/) | **Complete (M1/S1.1)** — `Base` + naming convention, lazy async engine, session factory. **No models, no migrations** |
-| API routers | [backend/api/routers/](backend/api/routers/) | Signatures only, all bodies `TODO` |
+| API routers | [backend/api/routers/](backend/api/routers/) | `auth` (register, login) and `health` implemented; the other 9 protected routes enforce authentication but have `TODO` bodies |
 | API schemas | [backend/api/schemas/](backend/api/schemas/) | **Complete** |
-| Services | [backend/services/](backend/services/) | `DocumentService` reads/deletes via repositories and owns the transaction (M1/S1.4); `upload_and_process` is M3. `AuthService` (M2), `SearchService` (M4) still stubs |
+| Services | [backend/services/](backend/services/) | `DocumentService` reads/deletes via repositories and owns the transaction (M1/S1.4); `upload_and_process` is M3. **`AuthService` complete (M2/S2.4)** — register and login, bcrypt, JWT issuance. `SearchService` (M4) still a stub |
 | Security | [backend/security/](backend/security/) | `jwt_handler` complete (M2/S2.1); `authentication` + `get_current_user` complete and fail-closed (M2/S2.2); `passwords` complete — bcrypt, 12-char/72-byte policy, NFKC (M2/S2.3). `rbac.py` still stubs — S2.5 |
 | RAG pipeline | [document_processing/](document_processing/) | **All stubs** |
 | Vector store | [vector_db/qdrant/](vector_db/qdrant/) | Client + config complete; repository all stubs |
@@ -176,8 +176,9 @@ Edges that **do not exist** despite being documented:
   protected route now resolves a `Principal` or returns 401. What is still missing is the
   layer between — **router bodies are still `...`**, and `DocumentService` still takes a
   `user_id` rather than a `Principal` (S2.5). So nothing persists over HTTP yet, and there
-  is no way to *obtain* a token over HTTP until S2.4. `AuthService` and `SearchService`
-  remain stubs (M2 and M4).
+  tokens are obtained over HTTP as of M2/S2.4: `POST /api/v1/auth/register`
+  creates an account and `POST /api/v1/auth/login` issues a 60-minute access
+  token that `get_current_user` accepts. `SearchService` remains a stub (M4).
 - **No task queue.** Ingest runs inline in the request handler.
 - **No reranker, no hybrid/BM25 search, no query expansion.**
 

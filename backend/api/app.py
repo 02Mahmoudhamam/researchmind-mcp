@@ -3,8 +3,11 @@
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from backend.config.settings import get_settings
 from backend.db.engine import dispose_engine
 from backend.api.routers import documents, agents, search, auth, workspace, health
@@ -29,6 +32,41 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     yield
     await dispose_engine()
+
+
+# Field names whose submitted value must never be echoed back.
+#
+# FastAPI's default 422 handler includes the rejected input in the error, which
+# is genuinely useful for `"year": "twenty"` and exactly wrong for a password:
+# a registration with a password the policy rejects would return that password
+# in the response body, from where it reaches proxy logs, browser devtools and
+# error trackers. Caught by a test in tests/integration/test_registration_login.py.
+_SENSITIVE_FIELD_FRAGMENTS = ("password", "secret", "token")
+
+
+def _is_sensitive(location: object) -> bool:
+    return any(
+        fragment in str(part).lower()
+        for part in (location if isinstance(location, (list, tuple)) else ())
+        for fragment in _SENSITIVE_FIELD_FRAGMENTS
+    )
+
+
+async def _validation_error_without_secrets(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """FastAPI's 422, with the submitted value removed for secret fields.
+
+    Deliberately narrow. It changes *which value* is reported, never the shape
+    of the response: the body is still `{"detail": [...]}` with the same
+    `type`, `loc` and `msg`, so a client can still tell the caller which field
+    was wrong and why. Only the echo of what they sent is replaced.
+    """
+    errors = [
+        {**error, "input": "<redacted>"} if _is_sensitive(error.get("loc")) else error
+        for error in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content=jsonable_encoder({"detail": errors}))
 
 
 def create_app() -> FastAPI:
@@ -58,6 +96,11 @@ def create_app() -> FastAPI:
         allow_credentials=False,
         allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],
+    )
+
+    app.add_exception_handler(
+        RequestValidationError,
+        _validation_error_without_secrets,  # type: ignore[arg-type]
     )
 
     # Mounted at the root, without a version prefix: liveness and readiness are

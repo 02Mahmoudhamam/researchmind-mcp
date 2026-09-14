@@ -135,19 +135,74 @@ A route added *without* that dependency fails
 application's own dependency tree. Making a route public means adding it to
 `PUBLIC_PATHS` — deliberately an edit that shows up in review.
 
+## Getting a token
+
+Two public endpoints, added in M2/S2.4. They are the only routes that do not
+require one.
+
+```
+POST /api/v1/auth/register   201  ->  the account. No token.
+POST /api/v1/auth/login      200  ->  {"access_token", "token_type", "expires_in"}
+```
+
+**Registration does not sign you in.** Creating an account and proving you can
+supply its password are separate acts, and keeping them apart is what lets an
+email-verification step slot in later without changing this contract.
+
+Uniqueness is the database's decision, not the service's. There is no "does
+this email exist" query before the insert: between that check and the insert
+another request can create the same account, and only the `uq_users_email`
+constraint can rule it out atomically. A duplicate is a **409**.
+
+A **409 does tell a caller that an address is registered.** That is unavoidable
+for a registration endpoint that answers synchronously, and it is recorded here
+rather than hidden behind a 200 that creates nothing. Closing it needs the
+verification-email flow.
+
+### Why login checks the password before it checks anything else
+
+```python
+stored  = credentials.password_hash if credentials is not None else None
+matched = verify_password(password, stored)      # always runs
+if credentials is None or not matched: ...
+```
+
+A nonexistent account, an account with no password, a wrong password and a
+disabled account all cost one bcrypt round and produce one error. Returning
+early for an unknown address would answer in under a millisecond while a real
+account spends ~230ms — an enumeration oracle that identical response bodies do
+nothing to close. `verify_password` performs the throwaway round itself when
+handed no hash, so a caller cannot forget to.
+
+`matched` is computed *before* the branch deliberately: `credentials is None or
+not verify_password(...)` short-circuits, skipping the round for exactly the
+case that needs it.
+
+### Why a failed login looks like a failed token
+
+Both raise `unauthenticated()` — the same helper, so the detail string and the
+`WWW-Authenticate` header cannot drift apart:
+
+```
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer
+
+{"detail": "Could not validate credentials"}
+```
+
+### Reading a credential
+
+`UserRepository.get_credentials_by_email` is the only method that returns
+`password_hash`, and it returns `UserCredentials` — never `User`. Putting the
+hash on `User` to make login convenient would undo the boundary: `User` is what
+every read path returns.
+
+It is **not** filtered on `is_active`, because skipping disabled accounts would
+make them answer in a different time from live ones. The service checks
+`is_active` after the password comparison.
+
 ## What is still missing
 
-There is **no way to obtain a token over HTTP**. Registration and login are
-S2.4; tokens are minted directly from a user id, which is why authentication
-could be fixed before login existed, and why fixing it first was the right
-order.
-
-M2/S2.3 has since added password *storage* — `users.password_hash`, bcrypt, and
-the policy in [`backend/security/passwords.py`](../../backend/security/passwords.py)
-— but nothing writes to the column yet, so every account is `password_hash =
-NULL` and cannot be signed into with a password. Authentication does not consult
-it: a token resolves a user by id and checks `is_active`, exactly as it did
-before that sprint.
-
-Still absent: RBAC and any 403 (S2.5), password reset, email verification, MFA,
-and refresh tokens — the last by design, not by schedule (principles.md §6).
+No RBAC and no 403 (S2.5) — `require_role` is still a stub. No password reset,
+no email verification, no MFA, no account recovery. No refresh tokens, and that
+one is by design rather than by schedule (principles.md §6).

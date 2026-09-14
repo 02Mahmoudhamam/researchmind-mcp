@@ -1,14 +1,20 @@
 """Auth request/response schemas.
 
-The endpoints that use these are still stubs — registration and login are
-Sprint M2/S2.4. What S2.3 establishes is the *contract*: a password arriving
-here is validated and normalised before anything else sees it, so the service
-layer S2.4 writes cannot accidentally hash a password nobody checked.
+A password arriving here is validated and normalised before anything else sees
+it (M2/S2.3), so the service cannot hash one nobody checked.
+
+Nothing in this module can carry a credential outward. `RegisterResponse` lists
+its fields explicitly rather than echoing the model it is built from, so a
+column added to `User` later cannot appear in a response by default — which is
+the mistake that leaks a hash.
 """
+
+from datetime import datetime
 
 from pydantic import BaseModel, EmailStr
 
 from backend.security.passwords import Password
+from shared.models.user import UserRole
 
 
 class RegisterRequest(BaseModel):
@@ -34,7 +40,36 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class RegisterResponse(BaseModel):
+    """The new account, as the client is allowed to see it.
+
+    Registration returns the account and **not** a token: creating an account
+    and proving you can sign into it are separate acts, and keeping them apart
+    is what lets a verification step slot in later without changing the
+    contract. The client calls `/auth/login` next.
+
+    An explicit field list, not `User` itself. FastAPI filters the response
+    through this model, so this is the second of two independent reasons a
+    `password_hash` cannot reach a client — the first being that `User` has no
+    such field at all.
+    """
+
+    id: str
+    email: EmailStr
+    full_name: str
+    role: UserRole
+    is_active: bool
+    created_at: datetime
+
+
 class LoginResponse(BaseModel):
+    """The token, in the shape OAuth 2.0 describes (RFC 6749 §4.2.2).
+
+    Unchanged by S2.4 — `expires_in` is seconds, and there is no
+    `refresh_token` field because there is no refresh token
+    (security/principles.md §6).
+    """
+
     access_token: str
     token_type: str = "bearer"
     expires_in: int
