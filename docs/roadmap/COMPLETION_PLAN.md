@@ -135,7 +135,7 @@ An integration test (`tests/integration/test_repositories.py`) that, against a r
 |---|---|---|
 | 2.1 | Replace `python-jose` with `pyjwt` | `pyproject.toml`, `backend/security/jwt_handler.py:4` |
 | 2.2 | Implement `create_access_token` / `verify_token` — verify signature **and** `exp`, raise on any failure | `backend/security/jwt_handler.py:14-30` |
-| 2.3 | Password hashing with `passlib[bcrypt]` or `argon2-cffi` in `AuthService.register/login` | `backend/services/auth_service.py:11-17` |
+| 2.3 | ~~Password hashing with `passlib[bcrypt]` or `argon2-cffi` in `AuthService.register/login`~~ — **done, M2/S2.3**, with two deviations: `bcrypt` used **directly** (passlib picks a backend at import and can fall through to stdlib `crypt`, removed in 3.13), and the primitives live in `backend/security/passwords.py` rather than in `AuthService`, so registration *and* login share one policy. Storage only — `AuthService` is still a stub. | `backend/security/passwords.py`, `backend/db/models/user.py`, `alembic/versions/…_0002_…` |
 | 2.4 | Implement `get_current_user`: verify token → load user from Postgres → 401 on *any* failure. **No path may return `None`.** | `backend/security/api_security.py:13-17` |
 | 2.5 | Implement `RBACPolicy.has_permission` / `get_permissions` and apply `require_role` to routes | `backend/security/rbac.py:21-27`, `backend/api/routers/*` |
 | 2.6 | **Remove the `"changeme"` defaults** from `SECRET_KEY` and `JWT_SECRET`; add a validator rejecting known-weak values so the app refuses to boot | `backend/config/settings.py:15,37` |

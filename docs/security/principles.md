@@ -119,6 +119,36 @@ path entirely, and costs one `if`.
   so a stolen token is valid until expiry — stated plainly rather than hidden.
 - If a secret is exposed: **rotate first**, then clean history.
 
+## 6a. Passwords
+
+Stored as a **bcrypt** digest and nothing else. Plaintext exists in the process
+for the duration of one function call in
+[`backend/security/passwords.py`](../../backend/security/passwords.py) and is
+never written, logged, or placed in an exception message.
+
+- **Minimum 12 characters**, and **no composition rules**. Requiring a capital,
+  a digit and a symbol produces `Password1!` — it narrows the space attackers
+  search far more than it widens the one they theoretically must. NIST SP
+  800-63B has advised against composition rules since 2017.
+- **Maximum 72 bytes**, measured in UTF-8 and not in characters. bcrypt reads
+  at most 72 bytes; 30 CJK characters are 90.
+- **Rejected, never truncated.** bcrypt 4.3.0 does *not* raise on a longer
+  password — it silently ignores the tail, so a 97-byte password verifies
+  against a hash built from its first 72 bytes. Measured, not assumed. The
+  explicit check is the only thing preventing two different passwords from
+  hashing identically.
+- **NFKC normalisation** on hashing *and* on verification. Normalising only on
+  the way in means a user whose keyboard emits a compatibility form enrols once
+  and can never sign in again.
+- The policy applies where a password is **chosen**, not where one is
+  **presented**. Validating a sign-in attempt would lock out a user whose
+  password predates a tightening of the rules, and would answer "too short"
+  where the only safe answer is "wrong".
+- `password_hash` is **nullable**, and every row is currently NULL. An account
+  with no password cannot be signed into; `verify_password` returns False.
+- The hash is storage-only. It is absent from the `User` API contract and from
+  `Principal`, and never appears in a response.
+
 ## 7. Logging
 
 Never log tokens, passwords, API keys, or document content. Redaction is

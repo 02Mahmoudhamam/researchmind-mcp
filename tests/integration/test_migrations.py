@@ -128,14 +128,52 @@ class TestSchemaProducedByMigration:
         """
         assert await _scalar(ENUM_TYPES_SQL) == 0
 
-    async def test_there_are_no_credential_columns(self) -> None:
-        """Asserted against the live schema, not only the model."""
+    async def test_the_only_credential_column_is_the_password_hash(self) -> None:
+        """Asserted against the live schema, not only the model.
+
+        Migration 0002 introduced exactly one credential column. This is the
+        database's own account of that, read from information_schema rather
+        than from the ORM that was supposed to produce it.
+        """
         columns = await _names(
             "SELECT column_name FROM information_schema.columns "
             "WHERE table_schema='public'"
         )
+        credential_like = {
+            "password",
+            "passwd",
+            "password_hash",
+            "hashed_password",
+            "salt",
+            "secret",
+            "api_key",
+            "refresh_token",
+        }
 
-        assert not columns & {"password", "password_hash", "hashed_password", "salt"}
+        assert columns & credential_like == {"password_hash"}
+
+    async def test_the_migrated_password_hash_column_is_nullable(self) -> None:
+        """The property that makes 0002 safe on a table that already has rows."""
+        nullable = await _scalar(
+            "SELECT is_nullable = 'YES' FROM information_schema.columns "
+            "WHERE table_name = 'users' AND column_name = 'password_hash'"
+        )
+
+        assert nullable is True
+
+    async def test_the_password_hash_column_has_no_default(self) -> None:
+        """A default would silently give every existing row a credential.
+
+        It would also make ADD COLUMN rewrite the table on older PostgreSQL.
+        Both are reasons the column arrives empty and stays that way until
+        S2.4 writes to it.
+        """
+        default = await _scalar(
+            "SELECT column_default FROM information_schema.columns "
+            "WHERE table_name = 'users' AND column_name = 'password_hash'"
+        )
+
+        assert default is None
 
 
 class TestModelSchemaAgreement:
@@ -186,5 +224,5 @@ class TestLifecycle:
         result = alembic("heads")
 
         assert result.returncode == 0, result.stderr
-        assert "0001" in result.stdout
+        assert "0002" in result.stdout
         assert result.stdout.count("(head)") == 1, "more than one head — branched"

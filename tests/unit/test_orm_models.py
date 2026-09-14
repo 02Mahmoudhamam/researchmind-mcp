@@ -35,6 +35,8 @@ class TestTables:
                     "full_name",
                     "role",
                     "is_active",
+                    # M2/S2.3. The only non-identity column on this table.
+                    "password_hash",
                     "created_at",
                     "updated_at",
                 },
@@ -79,13 +81,69 @@ class TestTables:
 
 
 class TestAuthenticationBoundary:
-    def test_no_credential_columns_anywhere(self) -> None:
-        """Authentication is M2. A credential column here would pre-empt it."""
-        forbidden = {"password", "password_hash", "hashed_password", "salt", "token"}
+    """The boundary moved in M2/S2.3; it did not disappear.
 
+    Before S2.3 the rule was "no credential columns at all", which was the right
+    rule while M2 had not decided what a credential was. Now exactly one exists,
+    and these pin what it may be.
+    """
+
+    def test_the_only_credential_column_is_a_hash_on_users(self) -> None:
+        """One column, one table, and nothing resembling a second scheme."""
+        credential_like = {
+            "password",
+            "password_hash",
+            "hashed_password",
+            "salt",
+            "token",
+            "secret",
+            "api_key",
+            "refresh_token",
+        }
+        found = {
+            f"{name}.{column.name}"
+            for name, table in Base.metadata.tables.items()
+            for column in table.columns
+            if column.name in credential_like
+        }
+
+        assert found == {"users.password_hash"}, found
+
+    def test_no_table_stores_a_plaintext_password(self) -> None:
+        """The column that would matter most is the one named for what it holds.
+
+        A `password` column would pass a hashing test and still be the defect —
+        so the name is asserted, not just the presence of hashing code.
+        """
         for name, table in Base.metadata.tables.items():
-            leaked = {c.name for c in table.columns} & forbidden
-            assert not leaked, f"{name} carries credential columns: {leaked}"
+            plaintext = {c.name for c in table.columns} & {"password", "passwd"}
+            assert not plaintext, f"{name} carries plaintext credentials: {plaintext}"
+
+    def test_the_password_hash_is_nullable(self) -> None:
+        """NOT NULL would require inventing a credential for every existing row.
+
+        Nothing writes this column until S2.4, so NULL is not a transitional
+        state — it is the only state any row can currently be in.
+        """
+        assert Base.metadata.tables["users"].c.password_hash.nullable is True
+
+    def test_the_password_hash_column_fits_a_bcrypt_digest(self) -> None:
+        """60 characters is today's output; the column allows for tomorrow's."""
+        from sqlalchemy import String
+
+        from backend.security.passwords import hash_password
+
+        # Narrowed rather than ignored: a column that is not a String has no
+        # length to check, and would mean something else has changed here.
+        column_type = Base.metadata.tables["users"].c.password_hash.type
+        assert isinstance(column_type, String)
+
+        assert column_type.length is not None
+        assert column_type.length >= len(hash_password("a" * 12))
+
+    def test_no_token_or_session_table_appeared(self) -> None:
+        """Still no server-side revocation (principles.md §6), and S2.3 adds none."""
+        assert set(Base.metadata.tables) == {"users", "documents", "document_chunks"}
 
 
 class TestOwnership:
