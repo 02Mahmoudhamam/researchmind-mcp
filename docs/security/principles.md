@@ -147,7 +147,20 @@ never written, logged, or placed in an exception message.
 - `password_hash` is **nullable**, and every row is currently NULL. An account
   with no password cannot be signed into; `verify_password` returns False.
 - The hash is storage-only. It is absent from the `User` API contract and from
-  `Principal`, and never appears in a response.
+  `Principal`, and never appears in a response. `UserCredentials` is the one
+  type that carries it, and no route declares it as a response model.
+- **A failed sign-in costs what a successful one costs.** An unknown address, an
+  account with no password and a wrong password each perform one bcrypt round —
+  the absent-hash path verifies against a throwaway hash and discards the
+  result. Identical response bodies are worthless while the timing differs by
+  ~230ms.
+- **A failed sign-in is the same 401 a forged token is**, from the same helper,
+  so the two cannot drift apart.
+- **Registration does not issue a token.** Creating an account and proving you
+  can supply its password are separate acts.
+- **A rejected password is never echoed back.** FastAPI's default 422 includes
+  the submitted value; the handler in `backend/api/app.py` redacts it for
+  fields named password, secret or token, and for nothing else.
 
 ## 7. Logging
 

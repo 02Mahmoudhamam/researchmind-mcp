@@ -135,12 +135,12 @@ An integration test (`tests/integration/test_repositories.py`) that, against a r
 |---|---|---|
 | 2.1 | Replace `python-jose` with `pyjwt` | `pyproject.toml`, `backend/security/jwt_handler.py:4` |
 | 2.2 | Implement `create_access_token` / `verify_token` — verify signature **and** `exp`, raise on any failure | `backend/security/jwt_handler.py:14-30` |
-| 2.3 | ~~Password hashing with `passlib[bcrypt]` or `argon2-cffi` in `AuthService.register/login`~~ — **done, M2/S2.3**, with two deviations: `bcrypt` used **directly** (passlib picks a backend at import and can fall through to stdlib `crypt`, removed in 3.13), and the primitives live in `backend/security/passwords.py` rather than in `AuthService`, so registration *and* login share one policy. Storage only — `AuthService` is still a stub. | `backend/security/passwords.py`, `backend/db/models/user.py`, `alembic/versions/…_0002_…` |
+| 2.3 | ~~Password hashing with `passlib[bcrypt]` or `argon2-cffi` in `AuthService.register/login`~~ — **done, M2/S2.3**, with two deviations: `bcrypt` used **directly** (passlib picks a backend at import and can fall through to stdlib `crypt`, removed in 3.13), and the primitives live in `backend/security/passwords.py` rather than in `AuthService`, so registration *and* login share one policy. Storage only at the time; `AuthService` consumes it as of S2.4. | `backend/security/passwords.py`, `backend/db/models/user.py`, `alembic/versions/…_0002_…` |
 | 2.4 | Implement `get_current_user`: verify token → load user from Postgres → 401 on *any* failure. **No path may return `None`.** | `backend/security/api_security.py:13-17` |
 | 2.5 | Implement `RBACPolicy.has_permission` / `get_permissions` and apply `require_role` to routes | `backend/security/rbac.py:21-27`, `backend/api/routers/*` |
 | 2.6 | **Remove the `"changeme"` defaults** from `SECRET_KEY` and `JWT_SECRET`; add a validator rejecting known-weak values so the app refuses to boot | `backend/config/settings.py:15,37` |
 | 2.7 | Replace CORS `allow_origins=["*"]` with `settings.CORS_ORIGINS` | `backend/api/app.py:17-22` |
-| 2.8 | Implement `POST /auth/{register,login}` end-to-end | `backend/api/routers/auth.py:9-24` |
+| 2.8 | ~~Implement `POST /auth/{register,login}` end-to-end~~ — **done, M2/S2.4.** Register returns **201 and the account, not a token**; login issues the S2.1 token. Uniqueness is enforced by `uq_users_email`, not a pre-check, so concurrent registrations cannot both succeed. | `backend/api/routers/auth.py`, `backend/services/auth_service.py`, `shared/models/credentials.py` |
 
 `[INFERENCE]` Task 2.1 is not gold-plating: `python-jose` `[FACT — pyproject.toml:20]` has had no
 release since 2021 and carries known algorithm-confusion CVEs. Swapping it while the module is
