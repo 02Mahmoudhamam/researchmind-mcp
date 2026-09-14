@@ -57,12 +57,16 @@ Desktop) can drive them.
 
 Python `^3.12`, Poetry, FastAPI + Uvicorn, `mcp` SDK, `anthropic`, Pydantic v2 +
 pydantic-settings, `qdrant-client`, `redis`, `pymupdf`, `langchain-text-splitters`,
-`PyJWT`, `passlib`, `structlog`, `httpx`.
+`PyJWT`, `bcrypt`, `structlog`, `httpx`.
 Frontend: Next.js 14 (App Router), React 18, TypeScript, Tailwind, axios, react-query,
 zustand, recharts.
 
 **Declared but never imported:** `anthropic`, `pymupdf`/`fitz`, `langchain-text-splitters`,
-`passlib`, `python-multipart` — these map exactly to the five stubbed subsystems.
+`python-multipart` — these map to the remaining stubbed subsystems. `passlib`
+was on this list from the scaffold onward and is **gone as of M2/S2.3**, replaced
+by `bcrypt` used directly: it was never imported once, and left installed it
+selects a hashing backend at import time, falling through to stdlib `crypt` —
+removed in Python 3.13.
 **Required but undeclared:** `openai` (the default embedding model is
 `text-embedding-3-small`). `email-validator` was also missing and is now declared via
 the `pydantic[email]` extra (M0/S0.1); before that, `shared/models/user.py` and
@@ -124,7 +128,7 @@ stub returns the right type). There is **no RAG evaluation of any kind**.
 | API routers | [backend/api/routers/](backend/api/routers/) | Signatures only, all bodies `TODO` |
 | API schemas | [backend/api/schemas/](backend/api/schemas/) | **Complete** |
 | Services | [backend/services/](backend/services/) | `DocumentService` reads/deletes via repositories and owns the transaction (M1/S1.4); `upload_and_process` is M3. `AuthService` (M2), `SearchService` (M4) still stubs |
-| Security | [backend/security/](backend/security/) | `jwt_handler` complete (M2/S2.1); `authentication` + `get_current_user` complete and fail-closed (M2/S2.2). `rbac.py` still stubs — S2.5 |
+| Security | [backend/security/](backend/security/) | `jwt_handler` complete (M2/S2.1); `authentication` + `get_current_user` complete and fail-closed (M2/S2.2); `passwords` complete — bcrypt, 12-char/72-byte policy, NFKC (M2/S2.3). `rbac.py` still stubs — S2.5 |
 | RAG pipeline | [document_processing/](document_processing/) | **All stubs** |
 | Vector store | [vector_db/qdrant/](vector_db/qdrant/) | Client + config complete; repository all stubs |
 | Memory | [memory_system/redis/](memory_system/redis/) | Client + config complete; store stubbed **and orphaned** |

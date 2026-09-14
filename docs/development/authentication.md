@@ -135,9 +135,19 @@ A route added *without* that dependency fails
 application's own dependency tree. Making a route public means adding it to
 `PUBLIC_PATHS` — deliberately an edit that shows up in review.
 
-## What S2.2 did not do
+## What is still missing
 
-No passwords, no `password_hash`, no registration, no login, no RBAC, no
-migration. There is currently **no way to obtain a token over HTTP** — S2.4 adds
-that. Tokens are minted directly from a user id, which is why authentication
-could be fixed before login exists, and why fixing it first was the right order.
+There is **no way to obtain a token over HTTP**. Registration and login are
+S2.4; tokens are minted directly from a user id, which is why authentication
+could be fixed before login existed, and why fixing it first was the right
+order.
+
+M2/S2.3 has since added password *storage* — `users.password_hash`, bcrypt, and
+the policy in [`backend/security/passwords.py`](../../backend/security/passwords.py)
+— but nothing writes to the column yet, so every account is `password_hash =
+NULL` and cannot be signed into with a password. Authentication does not consult
+it: a token resolves a user by id and checks `is_active`, exactly as it did
+before that sprint.
+
+Still absent: RBAC and any 403 (S2.5), password reset, email verification, MFA,
+and refresh tokens — the last by design, not by schedule (principles.md §6).
