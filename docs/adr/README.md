@@ -19,6 +19,7 @@ supersedes the old one, so the reasoning history stays intact.
 | [0007](0007-defer-parent-document-retrieval.md) | Parent-document retrieval deferred pending evaluation | Accepted |
 | [0008](0008-local-content-addressed-object-storage.md) | Local content-addressed object storage for uploads | Accepted |
 | [0009](0009-arq-for-asynchronous-ingestion.md) | ARQ over Redis for asynchronous ingestion | Accepted |
+| [0010](0010-per-owner-idempotent-upload.md) | Per-owner idempotent upload over content-addressed storage | Proposed |
 
 ## Statuses
 
