@@ -38,8 +38,8 @@ As of the foundation baseline, verified by execution:
 
 | Issue | Status |
 |---|---|
-| **Authentication fails open** — any non-empty bearer token is accepted and resolves to a null user | **Still open** — fixed in Sprint M2/S2.2. M2/S2.1 built the token foundation (signing, verification, algorithm pinning) but deliberately did not change `get_current_user` |
-| No authorisation — RBAC is defined but never enforced | Open — M2 |
+| ~~**Authentication fails open** — any non-empty bearer token is accepted and resolves to a null user~~ | **Resolved — M2/S2.2.** `get_current_user` returns a `Principal` or raises. Every protected route rejects a forged, malformed, expired, tampered, wrong-secret or unresolvable token with **401**, proven by a regression test over all nine routes and by mutation verification. Tokens for deleted or deactivated users are rejected on their next request |
+| No authorisation — RBAC is defined but never enforced | Open — M2/S2.5. Authentication answers *who are you*; this is *may you*. `require_role` is still a stub, and nothing emits 403 yet |
 | No tenant isolation — no relational store to check ownership against | Open — M1/M4 |
 | ~~Default `changeme` secrets with no fail-fast~~ | **Resolved — M2/S2.1.** The application refuses to start on a placeholder, empty or under-32-character secret outside `APP_ENV=development` |
 | ~~Unrestricted CORS (`allow_origins=["*"]`)~~ | **Resolved — M2/S2.1.** Explicit origin list from `CORS_ORIGINS`, enumerated methods and headers, credentials disabled |
@@ -101,7 +101,8 @@ logging rules — are documented in
 Secret scanning, push protection, dependency review and Dependabot are enabled.
 They detect known credential formats and known-vulnerable versions.
 
-They would not have caught the fail-open authentication bug, a missing tenant
-filter, or an agent reporting success without doing work. Those are caught by
-the release-gate test suites, and nothing else. Tooling supplements security
-engineering; it does not replace it.
+They did not catch the fail-open authentication bug — it sat in `main` through
+M0 and M1, and what found it was reading the code, not scanning it. Nor would
+they catch a missing tenant filter, or an agent reporting success without doing
+work. Those are caught by the release-gate test suites, and nothing else.
+Tooling supplements security engineering; it does not replace it.

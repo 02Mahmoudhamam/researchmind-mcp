@@ -15,6 +15,7 @@ Read first:
 - [docs/development/migrations.md](docs/development/migrations.md) — writing and verifying a schema change
 - [docs/development/repositories.md](docs/development/repositories.md) — the data-access boundary and how ownership is enforced
 - [docs/development/transactions.md](docs/development/transactions.md) — the service layer and who owns commit
+- [docs/development/authentication.md](docs/development/authentication.md) — how a request acquires an identity, and why a route cannot skip it
 - [docs/adr/](docs/adr/) — why the system is shaped this way
 - [docs/security/principles.md](docs/security/principles.md) — non-negotiable invariants
 
