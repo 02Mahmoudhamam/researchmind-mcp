@@ -84,10 +84,9 @@ strict = true
 explicit_package_bases = true
 mypy_path = "."
 
-# NOT ENFORCED IN CI YET — scheduled for Milestone M2, per the promotion schedule
-# in .github/workflows/ci-backend.yml. With the config above mypy runs properly
-# and reports 149 errors in 66 files, of which 54 are `empty-body`: the ~99 stubs
-# that declare a non-Optional return type and then `...`. Those are not type bugs
-# to fix, they are the unimplemented system. Turning this on now would mean
-# either a permanently red pipeline or blanket ignores, and both are worse than
-# an honest, dated deferral.
+# ENFORCED IN CI FOR THE M2 SECURITY SURFACE ONLY (M2/S2.5). The file list is in
+# .github/workflows/ci-backend.yml. The whole repository is not enforced: `mypy .`
+# reports 121 errors, most of them `empty-body` — stubs in M3–M6 subsystems that
+# declare a non-Optional return type and then `...`. Those are not type bugs to
+# fix, they are the unimplemented system, and each milestone adds the files it
+# makes real to the enforced list.

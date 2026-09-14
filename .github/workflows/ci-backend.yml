@@ -8,15 +8,21 @@
 # Promotion history (the schedule this file used to carry):
 #   Sprint M0/S0.1  poetry check, poetry install, pytest   — now enforced
 #   Milestone M0    ruff, black --check                    — now enforced
-#   Milestone M2    mypy --strict                          — STILL DEFERRED
+#   Milestone M2    mypy --strict                          — enforced, SCOPED (M2/S2.5)
 #
-# mypy is deliberately absent below. It is configured and runnable (see
-# [tool.mypy] in pyproject.toml, whose module-path defect was fixed in S0.5), but
-# it reports 149 errors in 66 files, 54 of them `empty-body` — the ~99 stubs that
+# mypy is promoted at M2 as scheduled, but over the M2 security surface only —
+# not the whole repository — and the scope is the honest part. `mypy .` still
+# reports 121 errors, most of them `empty-body`: stubs in M3–M6 subsystems that
 # declare a non-Optional return and then `...`. Those are the unimplemented
-# system, not type bugs. Enforcing it now would mean a permanently red pipeline
-# or blanket ignores; both teach people to ignore CI. It is promoted at M2, when
-# auth is the first subsystem with real bodies to type-check.
+# system, not type bugs, and enforcing them would mean a permanently red
+# pipeline or blanket ignores; both teach people to ignore CI.
+#
+# What *is* enforced: every file M2 made real — authentication, authorisation,
+# passwords, tokens, registration and login, the credential boundary — passes
+# `mypy --strict` with no ignores. `--follow-imports=silent` limits reporting to
+# the listed files while still type-checking against everything they import.
+# Each later milestone adds the files it makes real; `document_service.py` joins
+# when M3 replaces its upload stub, which is its one remaining error.
 name: Backend CI
 
 on:
@@ -96,6 +102,21 @@ jobs:
 
       - name: Format check (black)
         run: poetry run black --check .
+
+      - name: Type check the M2 security surface (mypy --strict)
+        run: |
+          poetry run mypy --follow-imports=silent \
+            backend/security/ \
+            backend/services/auth_service.py \
+            backend/api/routers/auth.py \
+            backend/api/routers/documents.py \
+            backend/api/dependencies/services.py \
+            backend/api/not_implemented.py \
+            backend/api/schemas/auth.py \
+            backend/db/repositories/user.py \
+            shared/models/principal.py \
+            shared/models/credentials.py \
+            shared/models/user.py
 
       - name: Assert `import mcp` resolves to the SDK, not this repository
         run: |
