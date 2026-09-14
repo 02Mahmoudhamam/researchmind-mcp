@@ -117,35 +117,22 @@ class TestServiceCoreStaysAdapterFree:
     core" quietly becomes a REST core with an MCP wrapper.
     """
 
-    # One known violation, inherited from the original scaffold and recorded
-    # rather than hidden: DocumentService.upload_and_process is typed
-    # `file: UploadFile`. It is an M3 method and still a stub, so changing the
-    # signature belongs to the sprint that implements it. This exemption is
-    # deliberately exact — any *other* FastAPI import in a service fails.
-    KNOWN_DEBT = {("document_service.py", "from fastapi import UploadFile")}
+    # There used to be one recorded exemption here: DocumentService's upload
+    # stub was typed `file: UploadFile`, and this class carried a KNOWN_DEBT set
+    # plus a test that failed once the debt was gone, "so the exemption cannot
+    # outlive the debt". M3/S3.1 implemented upload with a `BinaryIO` stream and
+    # that test failed exactly as designed. Exemption and test are deleted; any
+    # FastAPI import in a service now fails.
 
     @pytest.mark.parametrize("path", SERVICES, ids=lambda p: p.name)
-    def test_no_unrecorded_fastapi_import_in_a_service(
-        self, path: pathlib.Path
-    ) -> None:
+    def test_no_fastapi_import_in_a_service(self, path: pathlib.Path) -> None:
         offenders = {
             line.strip()
             for line in _code(path).splitlines()
             if "fastapi" in line and line.strip().startswith(("import ", "from "))
         }
-        allowed = {text for name, text in self.KNOWN_DEBT if name == path.name}
 
-        assert offenders <= allowed, f"{path.name}: {offenders - allowed}"
-
-    def test_the_known_debt_still_exists(self) -> None:
-        """Fails once M3 removes it, so the exemption cannot outlive the debt."""
-        source = (ROOT / "backend" / "services" / "document_service.py").read_text(
-            encoding="utf-8"
-        )
-
-        assert (
-            "from fastapi import UploadFile" in source
-        ), "the UploadFile debt is gone — delete KNOWN_DEBT and this test"
+        assert not offenders, f"{path.name}: {offenders}"
 
 
 class TestAuthenticationCannotReturnToAFailOpenContract:
@@ -455,3 +442,62 @@ class TestAuthorisationIsDecidedInOnePlace:
 
         assert "fastapi" not in code
         assert "starlette" not in code
+
+
+class TestStorageIsReachedOnlyThroughItsContract:
+    """ADR-0008: the service talks to `Storage`; only a backend touches a disk."""
+
+    @pytest.mark.parametrize("path", SERVICES, ids=lambda p: p.name)
+    def test_no_service_touches_the_filesystem(self, path: pathlib.Path) -> None:
+        """A service that opened a path could be handed one built from a filename.
+
+        Everything a service stores goes through `Storage.put`, whose keys come
+        only from `document_storage_key`.
+        """
+        code = _statements(path)
+
+        for forbidden in (
+            "open(",
+            "Path(",
+            "os.path",
+            "shutil",
+            "tempfile",
+            "os.remove",
+        ):
+            assert forbidden not in code, f"{path.name} uses {forbidden}"
+
+    def test_no_storage_key_is_built_from_a_filename(self) -> None:
+        """Every `document_storage_key(...)` in production code, read from the AST.
+
+        None of its arguments may mention a filename or a display name. The
+        behavioural traversal tests would catch the consequence; this catches
+        the line.
+        """
+        import ast
+
+        production = [
+            path
+            for directory in ("backend", "shared", "document_processing", "mcp_server")
+            for path in sorted((ROOT / directory).rglob("*.py"))
+            if "__pycache__" not in path.parts
+        ]
+        calls = [
+            (path, node)
+            for path in production
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "id", getattr(node.func, "attr", None))
+            == "document_storage_key"
+        ]
+        offenders = [
+            f"{path.relative_to(ROOT)}:{node.lineno}"
+            for path, node in calls
+            if any(
+                word in ast.unparse(argument).lower()
+                for argument in node.args + [k.value for k in node.keywords]
+                for word in ("filename", "name", "file.")
+            )
+        ]
+
+        assert calls, "document_storage_key is never called — the check is vacuous"
+        assert not offenders, offenders

@@ -181,16 +181,27 @@ class TestSoftDelete:
         assert await service.delete_document(document_id, owner) is False
 
 
-class TestNotImplementedSurface:
-    async def test_upload_is_still_a_stub(
+class TestUploadWiring:
+    async def test_upload_refuses_to_run_without_storage_and_a_queue(
         self, committing_session: AsyncSession
     ) -> None:
-        """S1.4 integrates persistence, not ingestion.
+        """Replaces `test_upload_is_still_a_stub`, which M1 pinned for M3 to retire.
 
-        Pinned so that "the service is wired up" is never read as "uploads
-        work". Storage is ADR-0008 and the pipeline is ADR-0009, both M3.
+        Upload is real now (M3/S3.1), so the pin that said "wired up is not
+        uploads work" has done its job. What remains true for a service built
+        for reads alone is that it refuses to upload — before reading the
+        stream, so nothing is consumed and nothing is stored.
         """
+        import io
+
+        from backend.services.document_service import UploadNotConfigured
+
         service = DocumentService(committing_session)
         owner = await _user(committing_session)
+        stream = io.BytesIO(b"%PDF-never-read")
 
-        assert await service.upload_and_process(None, owner) is None  # type: ignore[arg-type]
+        with pytest.raises(UploadNotConfigured):
+            await service.upload_and_process(
+                filename="p.pdf", stream=stream, principal=owner
+            )
+        assert stream.tell() == 0

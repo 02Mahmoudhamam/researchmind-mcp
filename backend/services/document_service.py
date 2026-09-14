@@ -27,12 +27,57 @@ or delete documents is decided by the route's permission dependency before the
 service is reached; this layer answers only "which rows are theirs".
 """
 
-from fastapi import UploadFile
+from typing import BinaryIO
+
+import anyio.to_thread
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config.settings import get_settings
 from backend.db.repositories import DocumentRepository
-from shared.models.document import Document
+from document_processing.validation import (
+    UploadRejected,
+    display_filename,
+    read_capped,
+    validate_pdf,
+)
+from shared.interfaces.ingestion import IngestionQueue
+from shared.interfaces.storage import Storage, StorageError, document_storage_key
+from shared.models.document import Document, DocumentType, UploadOutcome
+from shared.models.ingestion import IngestionJob
 from shared.models.principal import Principal
+from shared.utils.logger import get_logger
+
+_log = get_logger(__name__)
+
+# The partial unique index behind ADR-0010. Named so a duplicate upload is told
+# apart from every other integrity failure by which constraint fired.
+_CONTENT_UNIQUE_INDEX = "uq_documents_user_id_content_hash"
+
+
+class UploadNotConfigured(RuntimeError):
+    """This service instance was built without storage or an ingestion queue.
+
+    A wiring error, raised before anything is read or written. The API provider
+    always supplies both; a service constructed for reads alone does not.
+    """
+
+
+class UploadPersistenceFailed(Exception):
+    """The database could not record an upload. No document exists for it.
+
+    Raised after the transaction is rolled back and any file *this upload*
+    stored has been removed. The original exception is chained.
+    """
+
+
+def _is_duplicate_content(exc: IntegrityError) -> bool:
+    """True when the violated constraint is the per-owner content index."""
+    cause = getattr(exc.orig, "__cause__", None)
+    name = getattr(cause, "constraint_name", None)
+    if name is not None:
+        return bool(name == _CONTENT_UNIQUE_INDEX)
+    return _CONTENT_UNIQUE_INDEX in str(exc.orig)
 
 
 class DocumentService:
@@ -43,20 +88,181 @@ class DocumentService:
     what ADR-0003's cross-store deletion order needs it to do.
     """
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        storage: Storage | None = None,
+        ingestion: IngestionQueue | None = None,
+    ) -> None:
+        """Storage and the ingestion queue are needed by upload alone.
+
+        Optional so reads and deletes do not have to invent collaborators they
+        never use; `upload_and_process` refuses to start without both.
+        """
         self._session = session
         self._documents = DocumentRepository(session)
+        self._storage = storage
+        self._ingestion = ingestion
 
     async def upload_and_process(
-        self, file: UploadFile, principal: Principal
-    ) -> Document:
-        """Save file, create document record, trigger processing pipeline."""
-        # TODO(M3): validate the upload, write the bytes through the Storage
-        # protocol (ADR-0008), create the PENDING row via self._documents.create,
-        # commit, then enqueue the ARQ ingestion job (ADR-0009) and return 202.
-        # The DocumentProcessingPipeline is constructed there, not here: nothing
-        # else in this service needs a PDF parser, a chunker or a Qdrant client.
-        ...
+        self, *, filename: str | None, stream: BinaryIO, principal: Principal
+    ) -> UploadOutcome:
+        """Validate, store and record an upload, then hand it to ingestion.
+
+        The order is the design:
+
+        1. **Validate** (principles.md §4) — filename, size cap while reading,
+           magic bytes, opens, not password-protected, page cap. A refusal
+           happens here, before a byte is stored or a row exists.
+        2. **Deduplicate** (ADR-0010) — if this owner already has a live
+           document with this content, return it. Nothing else happens.
+        3. **Store** at `{owner}/{sha256}.pdf` (ADR-0008). Before the database,
+           so a committed row never points at bytes that were not written.
+        4. **Record** the document as `pending` and commit. On failure the
+           transaction is rolled back and the stored file removed — *only if
+           this call created it*, because an identical file already on disk
+           belongs to another row of this owner's.
+        5. **Enqueue** an `IngestionJob` — after the commit, so a worker can
+           never receive a job for a document that does not exist.
+
+        Filesystem and database cannot share a transaction, and this does not
+        pretend otherwise. Step 4's compensation covers the ordinary failures;
+        what it cannot cover — a crash between steps 3 and 4, or a concurrent
+        identical upload reusing a file this call then removes — leaves at worst
+        an orphaned file, which ADR-0008 accepts as wasted disk, not leaked data.
+
+        The owner is `principal.user_id`, and nothing else. There is no
+        parameter through which a caller could name another.
+
+        :raises UploadRejected: the upload breaks a validation rule.
+        :raises StorageError: the bytes could not be stored; nothing recorded.
+        :raises UploadPersistenceFailed: the row could not be recorded; nothing
+            left behind that this call created.
+        :raises UploadNotConfigured: built without storage or a queue.
+        """
+        if self._storage is None or self._ingestion is None:
+            raise UploadNotConfigured("upload requires storage and an ingestion queue")
+        storage, ingestion = self._storage, self._ingestion
+        settings = get_settings()
+        owner_id = principal.user_id
+
+        try:
+            name = display_filename(filename)
+            # Blocking disk reads and PyMuPDF are both kept off the event loop
+            # (ADR-0009 §3).
+            data = await anyio.to_thread.run_sync(
+                read_capped, stream, settings.MAX_UPLOAD_BYTES
+            )
+            validated = await anyio.to_thread.run_sync(
+                validate_pdf, data, settings.MAX_PDF_PAGES
+            )
+        except UploadRejected as rejection:
+            # The reason code, never the filename or any content.
+            _log.info(
+                "document.upload.rejected",
+                owner_id=owner_id,
+                reason=rejection.reason.value,
+            )
+            raise
+
+        existing = await self._documents.find_live_by_content_hash_for_user(
+            validated.content_hash, owner_id
+        )
+        if existing is not None:
+            _log.info(
+                "document.upload.deduplicated",
+                document_id=existing.id,
+                owner_id=owner_id,
+                content_hash=validated.content_hash,
+            )
+            return UploadOutcome(document=existing, created=False)
+
+        key = document_storage_key(owner_id, validated.content_hash)
+        try:
+            created_blob = await storage.put(key, data)
+        except StorageError:
+            _log.error(
+                "document.upload.storage_failed",
+                owner_id=owner_id,
+                content_hash=validated.content_hash,
+            )
+            raise
+
+        try:
+            document = await self._documents.create(
+                user_id=owner_id,
+                filename=name,
+                doc_type=DocumentType.PDF,
+                storage_key=key,
+                content_hash=validated.content_hash,
+                size_bytes=validated.size_bytes,
+                mime_type=validated.mime_type,
+                page_count=validated.page_count,
+            )
+            await self._session.commit()
+        except IntegrityError as exc:
+            await self._session.rollback()
+            if _is_duplicate_content(exc):
+                # A concurrent upload of the same file by the same owner won the
+                # insert. Its row points at the file on disk, so the file stays,
+                # whoever wrote it — and this upload's answer is that document.
+                winner = await self._documents.find_live_by_content_hash_for_user(
+                    validated.content_hash, owner_id
+                )
+                if winner is not None:
+                    return UploadOutcome(document=winner, created=False)
+            await self._discard(storage, key, created_blob, owner_id)
+            raise UploadPersistenceFailed("the document could not be recorded") from exc
+        except Exception as exc:
+            await self._session.rollback()
+            await self._discard(storage, key, created_blob, owner_id)
+            raise UploadPersistenceFailed("the document could not be recorded") from exc
+
+        _log.info(
+            "document.upload.stored",
+            document_id=document.id,
+            owner_id=owner_id,
+            content_hash=validated.content_hash,
+            size_bytes=validated.size_bytes,
+            page_count=validated.page_count,
+            status=document.status.value,
+            created_blob=created_blob,
+        )
+
+        await ingestion.enqueue(
+            IngestionJob(
+                document_id=document.id,
+                owner_id=owner_id,
+                storage_key=key,
+                content_hash=validated.content_hash,
+                mime_type=validated.mime_type,
+            )
+        )
+        return UploadOutcome(document=document, created=True)
+
+    @staticmethod
+    async def _discard(
+        storage: Storage, key: str, created_blob: bool, owner_id: str
+    ) -> None:
+        """Remove a file this upload stored, after its row failed to commit.
+
+        Only when `created_blob` is True. A file that was already there is an
+        identical upload's — a live or soft-deleted document of this owner still
+        points at it — and deleting it would break that document to tidy up
+        after this one.
+
+        Best effort: a failure to delete is logged, not raised, so it cannot
+        replace the database error the caller actually needs to see.
+        """
+        if not created_blob:
+            return
+        try:
+            await storage.delete(key)
+        except StorageError:
+            _log.error(
+                "document.upload.orphaned_blob", owner_id=owner_id, storage_key=key
+            )
 
     async def get_document(
         self, document_id: str, principal: Principal

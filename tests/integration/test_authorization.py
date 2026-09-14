@@ -43,6 +43,7 @@ from backend.services.document_service import DocumentService
 from shared.models.document import DocumentType
 from shared.models.principal import Principal
 from shared.models.user import User, UserRole
+from tests.pdfs import make_pdf
 
 pytestmark = [
     pytest.mark.db,
@@ -65,9 +66,9 @@ class Route:
 
     `allowed` is written out by hand rather than computed from the policy, so
     this table is an independent statement of intent. `reached` is the status
-    an authorised caller gets: 200 where the route works, 404 for a random
-    document id (ownership, after authorisation), 501 where the feature belongs
-    to a later milestone.
+    an authorised caller gets: 200 or 202 where the route works, 404 for a
+    random document id (ownership, after authorisation), 501 where the feature
+    belongs to a later milestone.
     """
 
     method: str
@@ -92,8 +93,10 @@ ROUTES = [
         "/api/v1/documents/upload",
         Permission.DOCUMENT_WRITE,
         frozenset({R, A}),
-        501,
-        {"files": {"file": ("p.pdf", b"%PDF-1.4", "application/pdf")}},
+        # 202 since M3/S3.1, with a real PDF: each role's user is a different
+        # owner, so identical bytes are a new document for each (ADR-0010).
+        202,
+        {"files": {"file": ("p.pdf", make_pdf(), "application/pdf")}},
     ),
     Route(
         "GET", "/api/v1/documents/", Permission.DOCUMENT_READ, frozenset({V, R, A}), 200
