@@ -41,6 +41,22 @@ _TEST_ENV: dict[str, str] = {
 for _key, _value in _TEST_ENV.items():
     os.environ[_key] = _value
 
+# Document storage goes to a directory created for this run, never the default.
+#
+# STORAGE_ROOT defaults to `uploads`, relative to the working directory — which
+# for a test run is the repository checkout. A test that forgot to override it
+# would write blobs into the developer's real storage directory, where the
+# gitignore hides them. Setting it here, before anything imports Settings, means
+# forgetting is harmless. Tests that inspect storage still use their own
+# `tmp_path`; this is the net underneath them.
+import atexit  # noqa: E402
+import shutil  # noqa: E402
+import tempfile  # noqa: E402
+
+_SESSION_STORAGE_ROOT = tempfile.mkdtemp(prefix="researchmind-test-storage-")
+os.environ["STORAGE_ROOT"] = _SESSION_STORAGE_ROOT
+atexit.register(shutil.rmtree, _SESSION_STORAGE_ROOT, True)
+
 # DATABASE_URL is the one setting deliberately NOT forced.
 #
 # Everything above is set unconditionally so a real ANTHROPIC_API_KEY in the
