@@ -9,20 +9,22 @@
 #   Sprint M0/S0.1  poetry check, poetry install, pytest   — now enforced
 #   Milestone M0    ruff, black --check                    — now enforced
 #   Milestone M2    mypy --strict                          — enforced, SCOPED (M2/S2.5)
+#   Milestone M3    same gate, extended to upload & storage — M3/S3.1
 #
-# mypy is promoted at M2 as scheduled, but over the M2 security surface only —
-# not the whole repository — and the scope is the honest part. `mypy .` still
-# reports 121 errors, most of them `empty-body`: stubs in M3–M6 subsystems that
+# mypy is promoted at M2 as scheduled, but over the finished surface only — not
+# the whole repository — and the scope is the honest part. `mypy .` still
+# reports 119 errors, most of them `empty-body`: stubs in M3–M6 subsystems that
 # declare a non-Optional return and then `...`. Those are the unimplemented
 # system, not type bugs, and enforcing them would mean a permanently red
 # pipeline or blanket ignores; both teach people to ignore CI.
 #
-# What *is* enforced: every file M2 made real — authentication, authorisation,
-# passwords, tokens, registration and login, the credential boundary — passes
-# `mypy --strict` with no ignores. `--follow-imports=silent` limits reporting to
+# What *is* enforced: every file a finished sprint made real passes
+# `mypy --strict` with no ignores — M2's authentication, authorisation,
+# passwords, tokens, registration and login; and since M3/S3.1 upload
+# validation, content-addressed storage, the ingestion boundary and the document
+# service, repository and models. `--follow-imports=silent` limits reporting to
 # the listed files while still type-checking against everything they import.
-# Each later milestone adds the files it makes real; `document_service.py` joins
-# when M3 replaces its upload stub, which is its one remaining error.
+# Each later sprint adds the files it makes real.
 name: Backend CI
 
 on:
@@ -103,7 +105,7 @@ jobs:
       - name: Format check (black)
         run: poetry run black --check .
 
-      - name: Type check the M2 security surface (mypy --strict)
+      - name: Type check the finished surface (mypy --strict)
         run: |
           poetry run mypy --follow-imports=silent \
             backend/security/ \
@@ -116,7 +118,18 @@ jobs:
             backend/db/repositories/user.py \
             shared/models/principal.py \
             shared/models/credentials.py \
-            shared/models/user.py
+            shared/models/user.py \
+            backend/services/document_service.py \
+            backend/db/repositories/document.py \
+            backend/db/models/document.py \
+            backend/api/schemas/documents.py \
+            backend/storage/ \
+            backend/ingestion/ \
+            shared/interfaces/storage.py \
+            shared/interfaces/ingestion.py \
+            shared/models/ingestion.py \
+            shared/models/document.py \
+            document_processing/validation.py
 
       - name: Assert `import mcp` resolves to the SDK, not this repository
         run: |

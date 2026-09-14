@@ -90,9 +90,9 @@ strict = true
 explicit_package_bases = true
 mypy_path = "."
 
-# ENFORCED IN CI FOR THE M2 SECURITY SURFACE ONLY (M2/S2.5). The file list is in
-# .github/workflows/ci-backend.yml. The whole repository is not enforced: `mypy .`
-# reports 121 errors, most of them `empty-body` — stubs in M3–M6 subsystems that
+# ENFORCED IN CI FOR FINISHED SPRINTS' FILES ONLY (since M2/S2.5; extended in
+# M3/S3.1). The file list is in .github/workflows/ci-backend.yml. The whole
+# repository is not enforced: `mypy .` reports 119 errors, most of them `empty-body` — stubs in M3–M6 subsystems that
 # declare a non-Optional return type and then `...`. Those are not type bugs to
 # fix, they are the unimplemented system, and each milestone adds the files it
 # makes real to the enforced list.
