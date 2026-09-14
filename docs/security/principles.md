@@ -28,6 +28,19 @@ Bearer totally-fake-not-a-jwt -> 200   user is None     ← accepted
 invisible in manual testing, while `get_current_user` verified nothing and
 returned `None`. Every protected endpoint accepted forged credentials.
 
+**Closed in Sprint M2/S2.2**, verified by execution on the same nine routes:
+
+```
+no Authorization header       -> 401 Could not validate credentials
+Bearer totally-fake-not-a-jwt -> 401 Could not validate credentials
+```
+
+The rules below are now enforced by
+[`tests/integration/test_authentication.py`](../../tests/integration/test_authentication.py)
+and by structural tests in `tests/unit/test_architecture.py`. See
+[docs/development/authentication.md](../development/authentication.md) for the
+resulting contract.
+
 ### Rules
 
 - `get_current_user` returns a `Principal` or **raises**. It can never return

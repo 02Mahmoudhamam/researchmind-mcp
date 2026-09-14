@@ -116,7 +116,7 @@ stub returns the right type). There is **no RAG evaluation of any kind**.
 
 | Area | Path | State |
 |---|---|---|
-| Domain models | [shared/models/](shared/models/) | **Complete** — best asset in the repo |
+| Domain models | [shared/models/](shared/models/) | **Complete** — best asset in the repo. `principal.py` (M2/S2.2) is the authenticated identity, distinct from `User` on purpose |
 | Interfaces (ABCs) | [shared/interfaces/](shared/interfaces/) | **Complete** — `BaseAgent`, `BaseVectorStore`, `BaseMemoryStore`. `BaseRepository` is **deliberately unimplemented**: its ID-only signatures cannot satisfy the ownership invariant (M1/S1.3) |
 | Repositories | [backend/db/repositories/](backend/db/repositories/) | **Complete (M1/S1.3)** — user, document, chunk; ownership in the SQL, not in a Python check |
 | Settings | [backend/config/settings.py](backend/config/settings.py) | **Complete** (insecure secret defaults); validates `DATABASE_URL` uses the asyncpg driver |
@@ -124,7 +124,7 @@ stub returns the right type). There is **no RAG evaluation of any kind**.
 | API routers | [backend/api/routers/](backend/api/routers/) | Signatures only, all bodies `TODO` |
 | API schemas | [backend/api/schemas/](backend/api/schemas/) | **Complete** |
 | Services | [backend/services/](backend/services/) | `DocumentService` reads/deletes via repositories and owns the transaction (M1/S1.4); `upload_and_process` is M3. `AuthService` (M2), `SearchService` (M4) still stubs |
-| Security | [backend/security/](backend/security/) | **All stubs** — JWT, RBAC, `get_current_user` |
+| Security | [backend/security/](backend/security/) | `jwt_handler` complete (M2/S2.1); `authentication` + `get_current_user` complete and fail-closed (M2/S2.2). `rbac.py` still stubs — S2.5 |
 | RAG pipeline | [document_processing/](document_processing/) | **All stubs** |
 | Vector store | [vector_db/qdrant/](vector_db/qdrant/) | Client + config complete; repository all stubs |
 | Memory | [memory_system/redis/](memory_system/redis/) | Client + config complete; store stubbed **and orphaned** |
@@ -168,10 +168,12 @@ Edges that **do not exist** despite being documented:
   `backend/db/repositories/` reads and writes it, with `user_id` a required parameter on
   every method that can reach an owned row **and present in the SQL predicate**.
   `DocumentService` is wired to those repositories (M1/S1.4) and owns the transaction: it
-  commits, repositories only flush. What is still missing is the layer above — **router
-  bodies are still `...`**, because they depend on `get_current_user`, which verifies
-  nothing until **M2**. So nothing persists over HTTP yet. `AuthService` and
-  `SearchService` remain stubs (M2 and M4).
+  commits, repositories only flush. Authentication above it is real as of M2/S2.2: every
+  protected route now resolves a `Principal` or returns 401. What is still missing is the
+  layer between — **router bodies are still `...`**, and `DocumentService` still takes a
+  `user_id` rather than a `Principal` (S2.5). So nothing persists over HTTP yet, and there
+  is no way to *obtain* a token over HTTP until S2.4. `AuthService` and `SearchService`
+  remain stubs (M2 and M4).
 - **No task queue.** Ingest runs inline in the request handler.
 - **No reranker, no hybrid/BM25 search, no query expansion.**
 
@@ -228,8 +230,11 @@ Qdrant will fail.
    ownership-scoped data access all exist; ownership is a database constraint *and* a query
    predicate. What remains is wiring services to it (S1.4) and binding tokens to persisted
    users (M2).
-4. **Auth fails open** — `HTTPBearer` rejects a *missing* header (so it looks correct), but
-   `get_current_user` verifies nothing: any non-empty Bearer string is accepted.
+4. ~~**Auth fails open**~~ — **RESOLVED in M2/S2.2.** `get_current_user` returns a
+   `Principal` or raises; every protected route answers a forged, expired, tampered or
+   unresolvable token with **401**. Identity is resolved by
+   `backend/security/authentication.py`, which imports no FastAPI so the MCP adapter can
+   reuse it (ADR-0002 §6). Role and email come from the database row, not the token.
 5. **Embedding provider unresolved** — OpenAI default in an Anthropic-only project.
 6. ~~**Transport contradiction**~~ — **RESOLVED in M0/S0.2.** ADR-0002 settled on stdio; the
    `mcp-server` container, `Dockerfile.mcp` and `MCP_SERVER_HOST`/`PORT` are removed.
