@@ -44,6 +44,29 @@ class TestWorkerSettings:
                 INGEST_JOB_TIMEOUT_SECONDS=300, INGEST_STALE_PROCESSING_SECONDS=stale
             )
 
+    @pytest.mark.parametrize("parse", [300, 301])
+    def test_a_parse_budget_not_below_the_job_timeout_is_refused(
+        self, parse: int
+    ) -> None:
+        """ARQ would cancel the job first, and no reason would ever be recorded."""
+        with pytest.raises(ValidationError, match="must be less than"):
+            _settings(
+                INGEST_JOB_TIMEOUT_SECONDS=300, INGEST_PARSE_TIMEOUT_SECONDS=parse
+            )
+
+    @pytest.mark.parametrize("value", [0, -1])
+    def test_a_parse_budget_that_permits_nothing_is_refused(self, value: int) -> None:
+        with pytest.raises(ValidationError):
+            _settings(INGEST_PARSE_TIMEOUT_SECONDS=value)
+
+    def test_the_default_parse_budget_fits_inside_the_job(self) -> None:
+        settings = _settings()
+
+        assert 0 < settings.INGEST_PARSE_TIMEOUT_SECONDS
+        assert (
+            settings.INGEST_PARSE_TIMEOUT_SECONDS < settings.INGEST_JOB_TIMEOUT_SECONDS
+        )
+
     def test_a_stale_threshold_above_the_timeout_is_accepted(self) -> None:
         settings = _settings(
             INGEST_JOB_TIMEOUT_SECONDS=300, INGEST_STALE_PROCESSING_SECONDS=301
@@ -85,3 +108,22 @@ class TestTheWorkerProcess:
 
         assert calls == [True]
         assert logging.getLogger("arq").propagate is False
+
+    async def test_startup_builds_the_parser_from_the_settings(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One process per concurrent job; the budget and page cap from Settings."""
+        from backend.config.settings import get_settings
+        from document_processing.pdf_parser import PyMuPDFTextExtractor
+
+        monkeypatch.setattr(worker_module, "configure_logging", lambda: None)
+        monkeypatch.setattr(logging.getLogger("arq"), "propagate", True)
+        ctx: dict[str, Any] = {}
+        await worker_module.startup(ctx)
+        settings = get_settings()
+
+        extractor = ctx["extractor"]
+        assert isinstance(extractor, PyMuPDFTextExtractor)
+        assert extractor._timeout == settings.INGEST_PARSE_TIMEOUT_SECONDS
+        assert extractor._limiter.total_tokens == settings.ARQ_MAX_JOBS
+        assert ctx["max_pdf_pages"] == settings.MAX_PDF_PAGES
