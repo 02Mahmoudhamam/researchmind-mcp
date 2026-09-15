@@ -133,8 +133,9 @@ class RecordingQueue:
     def __init__(self) -> None:
         self.jobs: list[IngestionJob] = []
 
-    async def enqueue(self, job: IngestionJob) -> None:
+    async def enqueue(self, job: IngestionJob) -> bool:
         self.jobs.append(job)
+        return True
 
 
 # -------------------------------------------------------------------- fixtures

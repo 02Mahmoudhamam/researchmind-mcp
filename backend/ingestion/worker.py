@@ -23,6 +23,7 @@ from pydantic import ValidationError
 from backend.config.settings import get_settings
 from backend.db.engine import dispose_engine
 from backend.db.session import get_sessionmaker
+from backend.ingestion.queue import PooledArqIngestionQueue
 from backend.services.ingestion_service import IngestionService, TransientIngestionError
 from backend.storage import LocalStorage
 from shared.interfaces.storage import Storage
@@ -40,6 +41,11 @@ _log = get_logger(__name__)
 # the first retry comes quickly in case the fault was momentary; later ones
 # give storage or the database room to recover.
 RETRY_DELAYS_SECONDS: tuple[int, ...] = (2, 10, 30, 60)
+
+# The most `pending` documents one recovery pass considers, oldest first. A
+# bound on the work a single minute's sweep does, not on what is recovered: the
+# next pass continues where this one's oldest documents have moved on.
+RECOVERY_BATCH_SIZE = 500
 
 
 def retry_delay_seconds(job_try: int) -> int:
@@ -105,14 +111,16 @@ async def ingest_document(ctx: dict[str, Any], payload: Any) -> dict[str, Any]:
             raise Retry(defer=retry_delay_seconds(job_try)) from exc
         except Exception as exc:
             # Unclassified — most likely the database. Retry while attempts
-            # remain. On the last one there may be nothing left to record the
-            # failure with; the claim, if any, is left for the reaper.
+            # remain. On the last one, record the failure if the database will
+            # take it: a document left `pending` would otherwise be handed a
+            # fresh job by the recovery sweep, and retried forever.
             if final_attempt:
                 _log.error(
                     "ingestion.gave_up",
                     document_id=job.document_id,
                     error=type(exc).__name__,
                 )
+                await _record_given_up(ctx, job)
                 raise
             _log.warning(
                 "ingestion.retry",
@@ -120,6 +128,34 @@ async def ingest_document(ctx: dict[str, Any], payload: Any) -> dict[str, Any]:
                 error=type(exc).__name__,
             )
             raise Retry(defer=retry_delay_seconds(job_try)) from exc
+    return result.model_dump(mode="json")
+
+
+async def _record_given_up(ctx: dict[str, Any], job: IngestionJob) -> None:
+    """Best effort, in a fresh session: the one that failed may be unusable."""
+    try:
+        async with get_sessionmaker()() as session:
+            await IngestionService(session, ctx["storage"]).record_given_up(job)
+    except Exception as exc:
+        # The database is still unreachable. The document stays as it is; the
+        # reaper or the recovery sweep takes it once the database is back.
+        _log.error(
+            "ingestion.gave_up_unrecorded",
+            document_id=job.document_id,
+            error=type(exc).__name__,
+        )
+
+
+async def recover_pending_documents(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Cron: queue a job for `pending` documents that have none (M3/S3.3).
+
+    Enqueues through the worker's own Redis connection, which ARQ provides as
+    `ctx["redis"]`.
+    """
+    async with get_sessionmaker()() as session:
+        result = await IngestionService(session, ctx["storage"]).recover_pending(
+            PooledArqIngestionQueue(ctx["redis"]), limit=RECOVERY_BATCH_SIZE
+        )
     return result.model_dump(mode="json")
 
 

@@ -33,7 +33,11 @@ from backend.ingestion.queue import (
     ingestion_job_id,
     redis_settings_from,
 )
-from backend.ingestion.worker import ingest_document, reap_stale_processing
+from backend.ingestion.worker import (
+    ingest_document,
+    reap_stale_processing,
+    recover_pending_documents,
+)
 from backend.security.jwt_handler import JWTHandler
 from backend.services.document_service import DocumentService
 from backend.storage import LocalStorage
@@ -74,8 +78,9 @@ class RecordingQueue:
     def __init__(self) -> None:
         self.jobs: list[IngestionJob] = []
 
-    async def enqueue(self, job: IngestionJob) -> None:
+    async def enqueue(self, job: IngestionJob) -> bool:
         self.jobs.append(job)
+        return True
 
 
 # -------------------------------------------------------------------- fixtures
@@ -417,14 +422,18 @@ class TestTheWorkerEntrypoint:
 
         settings = get_settings()
         (function,) = WorkerSettings.functions
-        (reaper,) = WorkerSettings.cron_jobs
+        crons = {job.coroutine: job for job in WorkerSettings.cron_jobs}
+        reaper = crons[reap_stale_processing]
+        recovery = crons[recover_pending_documents]
 
         assert function.name == INGEST_DOCUMENT_TASK
         assert function.coroutine is ingest_document
         assert function.max_tries == settings.INGEST_MAX_TRIES
         assert function.timeout_s == settings.INGEST_JOB_TIMEOUT_SECONDS
-        assert reaper.coroutine is reap_stale_processing
+        assert len(crons) == len(WorkerSettings.cron_jobs) == 2
         assert reaper.run_at_startup is True
+        assert recovery.run_at_startup is True
+        assert recovery.unique is True
         assert WorkerSettings.keep_result == 0
         assert (
             settings.INGEST_STALE_PROCESSING_SECONDS

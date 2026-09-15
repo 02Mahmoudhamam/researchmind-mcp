@@ -1,5 +1,5 @@
 """Ingestion queue and worker. The contract is `shared/interfaces/ingestion.py`."""
 
-from backend.ingestion.queue import ArqIngestionQueue
+from backend.ingestion.queue import ArqIngestionQueue, PooledArqIngestionQueue
 
-__all__ = ["ArqIngestionQueue"]
+__all__ = ["ArqIngestionQueue", "PooledArqIngestionQueue"]

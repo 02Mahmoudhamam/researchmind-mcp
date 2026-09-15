@@ -31,15 +31,21 @@ of `pending`.
 
 Every transition is a single conditional UPDATE, committed here. Repositories
 never commit (M1/S1.4).
+
+Two maintenance passes run beside deliveries: the reaper, which fails claims no
+worker holds any more (S3.2), and the recovery sweep, which re-enqueues `pending`
+documents that no job will pick up (S3.3).
 """
 
 import asyncio
 
 import anyio.to_thread
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.repositories import DocumentRepository
 from document_processing.validation import PDF_MIME_TYPE, content_hash
+from shared.interfaces.ingestion import IngestionQueue
 from shared.interfaces.storage import (
     Storage,
     StorageError,
@@ -53,6 +59,7 @@ from shared.models.ingestion import (
     IngestionReason,
     IngestionResult,
     IngestionTarget,
+    RecoveryResult,
 )
 from shared.utils.logger import get_logger
 
@@ -216,7 +223,135 @@ class IngestionService:
             )
         return reaped
 
+    async def recover_pending(
+        self, queue: IngestionQueue, *, limit: int
+    ) -> RecoveryResult:
+        """Queue a job for every `pending` document that has none (M3/S3.3).
+
+        A document can be left `pending` with no job to take it further: an ARQ
+        job timeout cancels the delivery, which puts its claim back and is not
+        retried; a job that exhausted its attempts on errors the database could
+        not record; a Redis outage between an upload's commit and its enqueue.
+        Without this, nothing would ever look at those documents again.
+
+        The job is built from the row PostgreSQL holds — its own `user_id`,
+        storage key, hash and type — never from a request, and it passes the
+        same checks as any other delivery when it runs. Duplicates are ARQ's to
+        refuse: the job id is the document's, and a document with a job already
+        queued, deferred or running gets no second one, however many sweeps race.
+
+        :param limit: the most documents one pass considers, oldest first.
+        """
+        try:
+            candidates = await self._documents.list_pending_for_recovery(limit=limit)
+        finally:
+            # A read-only transaction; end it before any network call to Redis.
+            await self._session.rollback()
+
+        requeued: list[str] = []
+        already_queued = skipped = 0
+        for target in candidates:
+            job = self._job_from_row(target)
+            if job is None:
+                skipped += 1
+                _log.error(
+                    "ingestion.recovery.skipped",
+                    document_id=target.document_id,
+                    reason=IngestionReason.INVALID_JOB.value,
+                )
+                continue
+            if await queue.enqueue(job):
+                requeued.append(job.document_id)
+                _log.info(
+                    "ingestion.recovery.requeued",
+                    document_id=job.document_id,
+                    owner_id=job.owner_id,
+                )
+            else:
+                already_queued += 1
+        if requeued or skipped:
+            _log.info(
+                "ingestion.recovery.pass",
+                requeued=len(requeued),
+                already_queued=already_queued,
+                skipped=skipped,
+            )
+        return RecoveryResult(
+            requeued=tuple(requeued), already_queued=already_queued, skipped=skipped
+        )
+
+    async def record_given_up(self, job: IngestionJob) -> bool:
+        """Fail a document whose final attempt ended in an unclassified error.
+
+        Called by the worker after the last attempt raised something the
+        service did not classify. Without it, a document that attempt never
+        claimed would stay `pending`, and the recovery sweep would give it a
+        fresh job with a fresh retry budget — retrying forever, which ADR-0009 §5
+        forbids. Recorded as `processing_failure`.
+
+        Still `processing → failed` only: a `pending` document is claimed first.
+        A document in `processing` here is this delivery's own claim — ARQ runs
+        at most one job per document id — or a dead worker's, which the reaper
+        would fail anyway. Returns whether a failure was recorded. Raises if the
+        database cannot be reached, in which case the sweep recovers the
+        document once it can.
+        """
+        reason = IngestionReason.PROCESSING_FAILURE
+        if not await self._transition(
+            job, expected=DocumentStatus.PENDING, new=DocumentStatus.PROCESSING
+        ) and not await self._is_processing(job):
+            return False
+        if not await self._transition(
+            job,
+            expected=DocumentStatus.PROCESSING,
+            new=DocumentStatus.FAILED,
+            failure_reason=reason,
+        ):
+            return False
+        _log.warning(
+            "ingestion.failed",
+            document_id=job.document_id,
+            owner_id=job.owner_id,
+            reason=reason.value,
+        )
+        return True
+
     # --- helpers --------------------------------------------------------------
+
+    @staticmethod
+    def _job_from_row(target: IngestionTarget) -> IngestionJob | None:
+        """The job a recovered document gets, or None if its row cannot make one.
+
+        Every field comes from the row. The storage key must still be what the
+        row's owner and hash derive to — the check a delivery would make — so a
+        row that fails it is reported rather than handed to a job certain to be
+        rejected, every minute, forever.
+        """
+        if (
+            target.storage_key is None
+            or target.content_hash is None
+            or target.mime_type is None
+        ):
+            return None
+        try:
+            derived = document_storage_key(target.owner_id, target.content_hash)
+            job = IngestionJob(
+                document_id=target.document_id,
+                owner_id=target.owner_id,
+                storage_key=target.storage_key,
+                content_hash=target.content_hash,
+                mime_type=target.mime_type,
+            )
+        except (ValueError, ValidationError):
+            return None
+        return job if derived == target.storage_key else None
+
+    async def _is_processing(self, job: IngestionJob) -> bool:
+        target = await self._documents.get_ingestion_target_for_user(
+            job.document_id, job.owner_id
+        )
+        await self._session.rollback()
+        return target is not None and target.status is DocumentStatus.PROCESSING
 
     @staticmethod
     def _job_disagrees_with(

@@ -199,8 +199,9 @@ class _AcceptingIngestionQueue:
     def __init__(self) -> None:
         self.jobs: list[Any] = []
 
-    async def enqueue(self, job: Any) -> None:
+    async def enqueue(self, job: Any) -> bool:
         self.jobs.append(job)
+        return True
 
 
 @pytest.fixture(autouse=True)

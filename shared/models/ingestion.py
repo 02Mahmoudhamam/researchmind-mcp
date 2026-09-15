@@ -120,3 +120,16 @@ class IngestionTarget(BaseModel):
     storage_key: str | None
     content_hash: str | None
     mime_type: str | None
+
+
+class RecoveryResult(BaseModel):
+    """What one pass of the recovery sweep did (M3/S3.3)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    # Documents this pass queued a job for.
+    requeued: tuple[str, ...] = ()
+    # Documents that already had a job queued, deferred or running.
+    already_queued: int = 0
+    # Rows whose stored fields cannot form a valid job. Logged, left untouched.
+    skipped: int = 0
