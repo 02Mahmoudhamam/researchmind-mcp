@@ -160,7 +160,7 @@ Embeddings run **locally**, so a full stack needs exactly one secret:
 | **Persistence** | ⚠️ Schema (migrations `0001`–`0004`), ownership-scoped repositories and `DocumentService`. Uploaded PDFs are stored content-addressed on a local volume (ADR-0008) and recorded as `pending`; parsing and chunking are later M3 sprints |
 | **Agents** | ❌ Return `success=True` without calling an LLM |
 | **Container builds** | ⚠️ Two images, not three — the MCP container was removed in M0/S0.2 (ADR-0002 settled on stdio). Both were made to build in M0/S0.4–S0.5; not re-verified since |
-| **Test suite** | ✅ 822 passed, 2 xfailed, against real PostgreSQL and Redis in CI |
+| **Test suite** | ✅ 823 passed, 2 xfailed, against real PostgreSQL and Redis in CI |
 
 Roughly **10% complete** by the pre-M0 audit's count. That figure has not been
 re-measured since, and is left as the audit stated it rather than revised by
@@ -229,7 +229,7 @@ functional. Commands are not documented here before they work.
 ## Testing
 
 ```bash
-poetry run pytest                       # ✅ 822 passed, 2 xfailed (needs postgres + redis; see testing.md)
+poetry run pytest                       # ✅ 823 passed, 2 xfailed (needs postgres + redis; see testing.md)
 poetry run ruff check .                 # ✅ enforced in CI
 poetry run black --check .              # ✅ enforced in CI
 poetry run mypy .                       # ⚠️ 119 errors repo-wide; strict-clean and CI-enforced over the M2 and M3 surfaces

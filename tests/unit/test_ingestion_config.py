@@ -1,11 +1,13 @@
 """Ingestion worker configuration and retry pacing — no Redis, no database."""
 
+import logging
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
 from backend.config.settings import Settings
+from backend.ingestion import worker as worker_module
 from backend.ingestion.worker import RETRY_DELAYS_SECONDS, retry_delay_seconds
 
 
@@ -62,3 +64,24 @@ class TestRetryPacing:
         self, attempt: int
     ) -> None:
         assert retry_delay_seconds(attempt) == RETRY_DELAYS_SECONDS[0]
+
+
+class TestTheWorkerProcess:
+    async def test_startup_applies_the_logging_settings(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`arq` configures no logging of ours, so LOG_FORMAT would never apply.
+
+        And arq's own lines keep their own handler rather than also reaching
+        the root handler configured here, which would print each one twice.
+        """
+        calls: list[bool] = []
+        monkeypatch.setattr(
+            worker_module, "configure_logging", lambda: calls.append(True)
+        )
+        monkeypatch.setattr(logging.getLogger("arq"), "propagate", True)
+
+        await worker_module.startup({})
+
+        assert calls == [True]
+        assert logging.getLogger("arq").propagate is False

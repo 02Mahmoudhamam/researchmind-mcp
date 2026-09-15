@@ -11,11 +11,13 @@ Marked `redis`: skipped locally without a Redis, required in CI
 
 import hashlib
 import io
+import logging
 import uuid
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Iterator
 
 import pytest
+import structlog
 from arq import create_pool
 from arq.worker import Worker, func
 from sqlalchemy import text
@@ -102,6 +104,16 @@ def storage_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("STORAGE_ROOT", str(root))
     get_settings.cache_clear()
     return root
+
+
+@pytest.fixture(autouse=True)
+def _logging_restored(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """The worker's startup configures logging for the whole process. Undo it."""
+    saved = structlog.get_config()
+    arq_logger = logging.getLogger("arq")
+    monkeypatch.setattr(arq_logger, "propagate", arq_logger.propagate)
+    yield
+    structlog.configure(**saved)
 
 
 @pytest.fixture(autouse=True)

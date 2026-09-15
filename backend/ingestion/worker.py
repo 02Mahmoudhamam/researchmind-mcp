@@ -14,6 +14,7 @@ attributes, which means reading configuration at import. Keeping it out of this
 module lets tests import the task functions without freezing settings.
 """
 
+import logging
 from typing import Any
 
 from arq import Retry
@@ -31,7 +32,7 @@ from shared.models.ingestion import (
     IngestionReason,
     IngestionResult,
 )
-from shared.utils.logger import get_logger
+from shared.utils.logger import configure_logging, get_logger
 
 _log = get_logger(__name__)
 
@@ -52,7 +53,15 @@ async def startup(ctx: dict[str, Any]) -> None:
     The composition root for the worker, as the dependency providers are for
     the API: the only place a concrete storage backend is named. Everything
     below receives `Storage`.
+
+    Logging is configured here too. The API's entrypoint, `main.py`, applies
+    LOG_FORMAT and LOG_LEVEL; the `arq` command applies neither, so without this
+    the worker would ignore both.
     """
+    configure_logging()
+    # arq's CLI gives its own logger a handler. With a root handler now present
+    # as well, every arq line would otherwise be printed twice.
+    logging.getLogger("arq").propagate = False
     settings = get_settings()
     storage: Storage = LocalStorage(settings.STORAGE_ROOT)
     ctx["storage"] = storage

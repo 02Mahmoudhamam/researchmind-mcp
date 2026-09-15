@@ -238,6 +238,13 @@ The worker, by contrast, retries its connection: waiting for Redis is its job.
 and reason codes — never a filename, path or file content, which a test
 asserts. No token or credential reaches the worker to be logged.
 
+The worker applies `LOG_FORMAT` and `LOG_LEVEL` itself, in `startup`: `main.py`
+does it for the API, and the `arq` command does not. arq's own lines — one per
+job start and finish — keep arq's format and print a truncated repr of the
+payload: ids, content hash and storage key, which is relative to
+`STORAGE_ROOT`. Never a filename or file content, because the job carries
+neither.
+
 ## Not done, and why it matters for S3.3
 
 - **Nothing takes a verified document further.** It is `pending` after the
