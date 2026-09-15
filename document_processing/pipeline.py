@@ -2,7 +2,7 @@
 
 from pathlib import Path
 from shared.models.document import Document
-from document_processing.pdf_parser import PDFParser
+from shared.interfaces.pdf_extraction import PdfTextExtractor
 from document_processing.chunker import TextChunker
 from document_processing.embedder import EmbeddingGenerator
 from document_processing.metadata_extractor import MetadataExtractor
@@ -16,7 +16,9 @@ class DocumentProcessingPipeline:
     """
 
     def __init__(self):
-        self._parser = PDFParser()
+        # TODO(M3/3.10): text extraction exists since S3.3 (PyMuPDFTextExtractor),
+        # run by the ingestion worker; wire this pipeline to it or retire it.
+        self._parser: PdfTextExtractor | None = None
         self._chunker = TextChunker()
         self._embedder = EmbeddingGenerator()
         self._extractor = MetadataExtractor()
