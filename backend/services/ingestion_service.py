@@ -3,8 +3,8 @@
 ADR-0009 runs this in a worker. The worker has no request, no token and no
 Principal; it has an `IngestionJob` built by the request that authenticated the
 upload, and the database. This service decides what that job is allowed to do,
-and records the outcome. It knows nothing about ARQ, HTTP or which storage
-backend holds the bytes.
+and records the outcome. It knows nothing about ARQ, HTTP, which storage backend
+holds the bytes, or which library reads a PDF.
 
 The order of a delivery, and why each step is where it is:
 
@@ -14,16 +14,22 @@ The order of a delivery, and why each step is where it is:
    type. A job that disagrees with the database is *rejected*: it is the job
    that is wrong, so the owner's document is left exactly as it was.
 3. **Check the state.** `processing` means another delivery holds the claim;
-   `ready` and `failed` are terminal. Either way, nothing is done.
+   `parsed` means this job's work is done; `ready` and `failed` are terminal.
+   In every one of those, nothing is done.
 4. **Claim**: `pending → processing`, a compare-and-set, committed. Only one
-   delivery can win it.
+   delivery can win it — which is why the claim comes before reading the
+   bytes: concurrent deliveries never read, hash or parse the same document.
 5. **Verify the bytes** through `Storage`: present, readable, and hashing to
    the recorded SHA-256. A document whose bytes are wrong *fails*, with the
    reason persisted, because that document can never be processed.
-6. **Release**: `processing → pending`. There is no processing stage yet — text
-   extraction and chunking are later M3 sprints — and `ready` means the content
-   has been processed (ADR-0009, the M3 definition of done). The only true
-   state for a sound document nothing has processed is `pending`.
+6. **Extract the text** (M3/S3.3) — only now, from bytes proven to be the
+   bytes validated at upload; never before. Through `PdfTextExtractor`, which
+   bounds the time a hostile PDF can take.
+7. **Store and advance**: the pages and `processing → parsed`, in one
+   transaction. A document is never `parsed` without its pages, and never has
+   pages while it is not. `ready` means searchable (ADR-0009, the M3 definition
+   of done), and nothing is searchable until chunking — so `parsed`, not
+   `ready`.
 
 Failures after the claim move `processing → failed`, which is the lifecycle
 ADR-0009 §4 draws: a document fails *while being processed*, never straight out
@@ -43,9 +49,10 @@ import anyio.to_thread
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.db.repositories import DocumentRepository
+from backend.db.repositories import DocumentPageRepository, DocumentRepository
 from document_processing.validation import PDF_MIME_TYPE, content_hash
 from shared.interfaces.ingestion import IngestionQueue
+from shared.interfaces.pdf_extraction import PdfExtractionError, PdfTextExtractor
 from shared.interfaces.storage import (
     Storage,
     StorageError,
@@ -53,6 +60,7 @@ from shared.interfaces.storage import (
     document_storage_key,
 )
 from shared.models.document import DocumentStatus
+from shared.models.extraction import ExtractedText
 from shared.models.ingestion import (
     IngestionJob,
     IngestionOutcome,
@@ -83,10 +91,27 @@ class TransientIngestionError(Exception):
 class IngestionService:
     """Runs one delivery of an ingestion job against the database and storage."""
 
-    def __init__(self, session: AsyncSession, storage: Storage) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        storage: Storage,
+        *,
+        extractor: PdfTextExtractor,
+        max_pages: int,
+    ) -> None:
+        """
+        :param extractor: reads text from verified PDF bytes, within its own
+            time budget.
+        :param max_pages: the most pages a document may have — the upload cap,
+            enforced again here because stored bytes and old rows predate any
+            later change to it.
+        """
         self._session = session
         self._storage = storage
+        self._extractor = extractor
+        self._max_pages = max_pages
         self._documents = DocumentRepository(session)
+        self._pages = DocumentPageRepository(session)
 
     async def ingest(
         self, job: IngestionJob, *, final_attempt: bool
@@ -134,6 +159,9 @@ class IngestionService:
         if target.status is DocumentStatus.PROCESSING:
             await self._session.rollback()
             return self._skipped(job, IngestionOutcome.SKIPPED_IN_PROGRESS)
+        if target.status is DocumentStatus.PARSED:
+            await self._session.rollback()
+            return self._skipped(job, IngestionOutcome.SKIPPED_PARSED)
         if target.status in (DocumentStatus.READY, DocumentStatus.FAILED):
             await self._session.rollback()
             return self._skipped(job, IngestionOutcome.SKIPPED_TERMINAL)
@@ -148,7 +176,7 @@ class IngestionService:
         )
 
         try:
-            return await self._verify_claimed(job, target, final_attempt=final_attempt)
+            return await self._process_claimed(job, target, final_attempt=final_attempt)
         except asyncio.CancelledError:
             # The job was cancelled — a timeout or a worker shutting down. Put the
             # document back so the next delivery can take it, rather than leaving
@@ -157,12 +185,16 @@ class IngestionService:
             await asyncio.shield(self._release_after_interruption(job))
             raise
 
-    async def _verify_claimed(
+    async def _process_claimed(
         self, job: IngestionJob, target: IngestionTarget, *, final_attempt: bool
     ) -> IngestionResult:
-        """Everything done while holding the claim."""
+        """Everything done while holding the claim: verify, extract, store."""
         if target.mime_type != PDF_MIME_TYPE:
             return await self._fail(job, IngestionReason.UNSUPPORTED_MIME_TYPE)
+        if target.page_count is not None and target.page_count > self._max_pages:
+            # Counted at upload, under a cap that may since have been lowered.
+            # Refused before the bytes are even read.
+            return await self._fail(job, IngestionReason.PAGE_LIMIT_EXCEEDED)
 
         try:
             content = await self._storage.get(job.storage_key)
@@ -184,21 +216,83 @@ class IngestionService:
             # tampering — either way permanent, and never retried.
             return await self._fail(job, IngestionReason.CONTENT_HASH_MISMATCH)
 
-        # No processing stage exists yet (M3/S3.2). Release the claim.
-        if not await self._transition(
-            job, expected=DocumentStatus.PROCESSING, new=DocumentStatus.PENDING
-        ):
+        # Only now are the bytes known to be the bytes validated at upload, and
+        # only now may anything read them as a PDF (M3/S3.3).
+        try:
+            extracted = await self._extractor.extract(
+                content, max_pages=self._max_pages
+            )
+        except PdfExtractionError as exc:
+            reason = IngestionReason(exc.reason.value)
+            if exc.transient:
+                return await self._transient(job, reason, final_attempt=final_attempt)
+            return await self._fail(job, reason)
+        except Exception:
+            return await self._transient(
+                job, IngestionReason.PROCESSING_FAILURE, final_attempt=final_attempt
+            )
+
+        if target.page_count is not None and extracted.page_count != target.page_count:
+            # The same bytes counted differently at upload. Nothing downstream
+            # could trust page numbers from either count.
+            return await self._fail(job, IngestionReason.PAGE_COUNT_MISMATCH)
+        if not extracted.has_text:
+            # A valid PDF with nothing to read — typically a scan. Without OCR
+            # (out of scope) it can never be searched, and a `parsed` document
+            # with no text would claim otherwise.
+            return await self._fail(job, IngestionReason.NO_EXTRACTABLE_TEXT)
+
+        try:
+            stored = await self._store_parsed(job, extracted)
+        except Exception:
+            # Rolled back: no pages and no `parsed`. The claim is released and
+            # the delivery retried, or failed on its last attempt.
+            return await self._transient(
+                job, IngestionReason.PROCESSING_FAILURE, final_attempt=final_attempt
+            )
+        if not stored:
             return self._claim_lost(job)
         _log.info(
-            "ingestion.verified",
+            "ingestion.parsed",
             document_id=job.document_id,
             owner_id=job.owner_id,
             content_hash=job.content_hash,
-            status=DocumentStatus.PENDING.value,
+            page_count=extracted.page_count,
+            pages_with_text=sum(1 for page in extracted.pages if page.blocks),
+            status=DocumentStatus.PARSED.value,
         )
         return IngestionResult(
-            outcome=IngestionOutcome.VERIFIED, document_id=job.document_id
+            outcome=IngestionOutcome.PARSED, document_id=job.document_id
         )
+
+    async def _store_parsed(self, job: IngestionJob, extracted: ExtractedText) -> bool:
+        """The pages and `processing → parsed`: one transaction, both or neither.
+
+        The status moves first, as a compare-and-set that also locks the row;
+        the pages are written under that lock; then one commit. A claim lost to
+        the reaper matches nothing, and the transaction is rolled back before a
+        single page is written. Returns whether the document is now `parsed`.
+        """
+        try:
+            moved = await self._documents.transition_status_for_user(
+                job.document_id,
+                job.owner_id,
+                expected=DocumentStatus.PROCESSING,
+                new=DocumentStatus.PARSED,
+            )
+            if not moved:
+                await self._session.rollback()
+                return False
+            await self._pages.add_for_user(
+                document_id=job.document_id,
+                user_id=job.owner_id,
+                pages=extracted.pages,
+            )
+            await self._session.commit()
+            return True
+        except Exception:
+            await self._session.rollback()
+            raise
 
     async def reap_stale_processing(self, *, stale_after_seconds: int) -> list[str]:
         """Fail documents whose claim has outlived any possible worker (ADR-0009 §6).

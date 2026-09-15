@@ -71,6 +71,19 @@ class IngestionReason(str, Enum):
     PROCESSING_FAILURE = "processing_failure"
     STALE_PROCESSING = "stale_processing"
 
+    # Text extraction (M3/S3.3). The first six are `ExtractionFailure`'s values,
+    # one for one; `parser_unavailable` is the only transient one.
+    PDF_OPEN_FAILED = "pdf_open_failed"
+    PDF_ENCRYPTED = "pdf_encrypted"
+    PAGE_LIMIT_EXCEEDED = "page_limit_exceeded"
+    PDF_PARSE_FAILED = "pdf_parse_failed"
+    PDF_TIMEOUT = "pdf_timeout"
+    PARSER_UNAVAILABLE = "parser_unavailable"
+    # Extraction counted a different number of pages than upload did.
+    PAGE_COUNT_MISMATCH = "page_count_mismatch"
+    # A valid PDF with no text on any page — typically a scan. There is no OCR.
+    NO_EXTRACTABLE_TEXT = "no_extractable_text"
+
     # Documents that were `error` before migration 0004 introduced reasons.
     UNKNOWN = "unknown"
 
@@ -78,12 +91,14 @@ class IngestionReason(str, Enum):
 class IngestionOutcome(str, Enum):
     """What one delivery of a job did. A job can be delivered more than once."""
 
-    # Checked and found sound; the claim is released and the document is
-    # `pending` again, because no processing stage exists yet to take it
-    # further (M3/S3.2). Nothing is claimed to have been parsed.
-    VERIFIED = "verified"
+    # Verified, text extracted, pages stored; the document is now `parsed`
+    # (M3/S3.3). Replaces S3.2's `verified`, which released a sound document
+    # back to `pending` because nothing could process it yet.
+    PARSED = "parsed"
     # Another delivery holds the claim. Nothing was done.
     SKIPPED_IN_PROGRESS = "skipped_in_progress"
+    # The document is already `parsed`: this job's work is done. Nothing was done.
+    SKIPPED_PARSED = "skipped_parsed"
     # The document is already `ready` or `failed`. Nothing was done.
     SKIPPED_TERMINAL = "skipped_terminal"
     # The job was not acted on; the document was not changed.
@@ -120,6 +135,8 @@ class IngestionTarget(BaseModel):
     storage_key: str | None
     content_hash: str | None
     mime_type: str | None
+    # Counted at upload (M3/S3.1). None for documents from before upload existed.
+    page_count: int | None = None
 
 
 class RecoveryResult(BaseModel):

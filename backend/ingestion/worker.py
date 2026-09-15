@@ -19,6 +19,7 @@ from typing import Any
 
 from arq import Retry
 from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config.settings import get_settings
 from backend.db.engine import dispose_engine
@@ -26,6 +27,8 @@ from backend.db.session import get_sessionmaker
 from backend.ingestion.queue import PooledArqIngestionQueue
 from backend.services.ingestion_service import IngestionService, TransientIngestionError
 from backend.storage import LocalStorage
+from document_processing.pdf_parser import PyMuPDFTextExtractor
+from shared.interfaces.pdf_extraction import PdfTextExtractor
 from shared.interfaces.storage import Storage
 from shared.models.ingestion import (
     IngestionJob,
@@ -57,8 +60,8 @@ async def startup(ctx: dict[str, Any]) -> None:
     """Build the worker's collaborators once per process.
 
     The composition root for the worker, as the dependency providers are for
-    the API: the only place a concrete storage backend is named. Everything
-    below receives `Storage`.
+    the API: the only place a concrete storage backend or PDF parser is named.
+    Everything below receives `Storage` and `PdfTextExtractor`.
 
     Logging is configured here too. The API's entrypoint, `main.py`, applies
     LOG_FORMAT and LOG_LEVEL; the `arq` command applies neither, so without this
@@ -71,9 +74,27 @@ async def startup(ctx: dict[str, Any]) -> None:
     settings = get_settings()
     storage: Storage = LocalStorage(settings.STORAGE_ROOT)
     ctx["storage"] = storage
+    # One extraction process per concurrent job at most, so a job never waits
+    # for a process with its parse budget running (M3/S3.3).
+    extractor: PdfTextExtractor = PyMuPDFTextExtractor(
+        timeout_seconds=settings.INGEST_PARSE_TIMEOUT_SECONDS,
+        max_concurrency=settings.ARQ_MAX_JOBS,
+    )
+    ctx["extractor"] = extractor
+    ctx["max_pdf_pages"] = settings.MAX_PDF_PAGES
     ctx["ingest_max_tries"] = settings.INGEST_MAX_TRIES
     ctx["stale_processing_seconds"] = settings.INGEST_STALE_PROCESSING_SECONDS
     _log.info("ingestion.worker.started")
+
+
+def _service(ctx: dict[str, Any], session: AsyncSession) -> IngestionService:
+    """The service over this job's session and the worker's collaborators."""
+    return IngestionService(
+        session,
+        ctx["storage"],
+        extractor=ctx["extractor"],
+        max_pages=int(ctx["max_pdf_pages"]),
+    )
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:
@@ -104,7 +125,7 @@ async def ingest_document(ctx: dict[str, Any], payload: Any) -> dict[str, Any]:
     final_attempt = job_try >= int(ctx["ingest_max_tries"])
 
     async with get_sessionmaker()() as session:
-        service = IngestionService(session, ctx["storage"])
+        service = _service(ctx, session)
         try:
             result = await service.ingest(job, final_attempt=final_attempt)
         except TransientIngestionError as exc:
@@ -135,7 +156,7 @@ async def _record_given_up(ctx: dict[str, Any], job: IngestionJob) -> None:
     """Best effort, in a fresh session: the one that failed may be unusable."""
     try:
         async with get_sessionmaker()() as session:
-            await IngestionService(session, ctx["storage"]).record_given_up(job)
+            await _service(ctx, session).record_given_up(job)
     except Exception as exc:
         # The database is still unreachable. The document stays as it is; the
         # reaper or the recovery sweep takes it once the database is back.
@@ -153,7 +174,7 @@ async def recover_pending_documents(ctx: dict[str, Any]) -> dict[str, Any]:
     `ctx["redis"]`.
     """
     async with get_sessionmaker()() as session:
-        result = await IngestionService(session, ctx["storage"]).recover_pending(
+        result = await _service(ctx, session).recover_pending(
             PooledArqIngestionQueue(ctx["redis"]), limit=RECOVERY_BATCH_SIZE
         )
     return result.model_dump(mode="json")
@@ -162,6 +183,6 @@ async def recover_pending_documents(ctx: dict[str, Any]) -> dict[str, Any]:
 async def reap_stale_processing(ctx: dict[str, Any]) -> list[str]:
     """Cron: fail documents whose claim has outlived any worker (ADR-0009 §6)."""
     async with get_sessionmaker()() as session:
-        return await IngestionService(session, ctx["storage"]).reap_stale_processing(
+        return await _service(ctx, session).reap_stale_processing(
             stale_after_seconds=int(ctx["stale_processing_seconds"])
         )

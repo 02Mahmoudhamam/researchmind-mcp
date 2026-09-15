@@ -10,6 +10,11 @@ same seam the service is written against — rather than patching internals.
 
 ARQ is not involved; `test_ingestion_worker.py` runs the same service inside a
 real ARQ worker against a real Redis.
+
+Since M3/S3.3 a sound document is parsed rather than released to `pending`, so
+the extractor here is the real one — PyMuPDF in a separate process — and the
+success these tests expect is `parsed`. Parsing's own cases are in
+`test_pdf_ingestion.py`; these keep S3.2's guarantees in force around it.
 """
 
 import asyncio
@@ -40,6 +45,7 @@ from backend.services.ingestion_service import (
     TransientIngestionError,
 )
 from backend.storage import LocalStorage
+from document_processing.pdf_parser import PyMuPDFTextExtractor
 from shared.interfaces.storage import StorageError, document_storage_key
 from shared.models.document import DocumentStatus
 from shared.models.ingestion import (
@@ -175,10 +181,20 @@ async def _upload(
     return queue.jobs[0]
 
 
+def _service(session: Any, storage: Any) -> IngestionService:
+    """The service as the worker builds it, with the real extractor."""
+    return IngestionService(
+        session,
+        storage,
+        extractor=PyMuPDFTextExtractor(timeout_seconds=60, max_concurrency=8),
+        max_pages=get_settings().MAX_PDF_PAGES,
+    )
+
+
 async def _ingest(storage: Any, job: IngestionJob, *, final: bool = False) -> Any:
     """One delivery, in its own session — as the worker runs it."""
     async with get_sessionmaker()() as session:
-        return await IngestionService(session, storage).ingest(job, final_attempt=final)
+        return await _service(session, storage).ingest(job, final_attempt=final)
 
 
 async def _row(session: Any, document_id: str) -> dict[str, Any]:
@@ -222,13 +238,13 @@ def _blob(root: Path, job: IngestionJob) -> Path:
 
 
 class TestASoundDocumentIsVerified:
-    async def test_it_is_verified_and_released_back_to_pending(
+    async def test_it_is_verified_then_parsed(
         self, committing_session: Any, storage: LocalStorage
     ) -> None:
-        """Not `ready`: nothing has processed the content (ADR-0009, M3 DoD).
+        """`parsed`, not `ready`: nothing has chunked it (ADR-0009, M3 DoD).
 
-        The worker has checked the bytes and released its claim. `pending` is the
-        only status that is true of a sound document no stage has processed yet.
+        S3.2 released a verified document back to `pending`, because no stage
+        existed to take it further. S3.3's extraction is that stage.
         """
         owner = await _owner(committing_session)
         job = await _upload(committing_session, storage, owner)
@@ -236,11 +252,11 @@ class TestASoundDocumentIsVerified:
 
         result = await _ingest(spy, job)
 
-        assert result.outcome is IngestionOutcome.VERIFIED
+        assert result.outcome is IngestionOutcome.PARSED
         assert result.document_id == job.document_id
         assert result.reason is None
         row = await _row(committing_session, job.document_id)
-        assert (row["status"], row["failure_reason"]) == ("pending", None)
+        assert (row["status"], row["failure_reason"]) == ("parsed", None)
         assert spy.gets == 1
 
     async def test_the_document_is_processing_while_it_is_being_read(
@@ -573,7 +589,7 @@ class TestTransientFailures:
 
         result = await _ingest(storage, job)
 
-        assert result.outcome is IngestionOutcome.VERIFIED
+        assert result.outcome is IngestionOutcome.PARSED
 
 
 # =============================================================================
@@ -586,10 +602,11 @@ class TestDeliveryIsIdempotent:
         ("status", "reason", "outcome"),
         [
             ("processing", None, IngestionOutcome.SKIPPED_IN_PROGRESS),
+            ("parsed", None, IngestionOutcome.SKIPPED_PARSED),
             ("ready", None, IngestionOutcome.SKIPPED_TERMINAL),
             ("failed", "storage_missing", IngestionOutcome.SKIPPED_TERMINAL),
         ],
-        ids=["processing", "ready", "failed"],
+        ids=["processing", "parsed", "ready", "failed"],
     )
     async def test_a_document_not_pending_is_left_exactly_as_it_is(
         self,
@@ -626,10 +643,10 @@ class TestDeliveryIsIdempotent:
         second = await _ingest(storage, job)
 
         assert (first.outcome, second.outcome) == (
-            IngestionOutcome.VERIFIED,
-            IngestionOutcome.VERIFIED,
+            IngestionOutcome.PARSED,
+            IngestionOutcome.SKIPPED_PARSED,
         )
-        assert (await _row(committing_session, job.document_id))["status"] == "pending"
+        assert (await _row(committing_session, job.document_id))["status"] == "parsed"
 
     async def test_a_failed_document_redelivered_keeps_its_reason(
         self, committing_session: Any, storage: LocalStorage, tmp_path: Path
@@ -654,7 +671,7 @@ class TestDeliveryIsIdempotent:
 
         Reads are held open, so if two deliveries both held the claim their reads
         would overlap. They never do. Every delivery ends without an error, and
-        the document ends `pending`.
+        the document ends `parsed` — by exactly one of them.
         """
         owner = await _owner(committing_session)
         job = await _upload(committing_session, storage, owner)
@@ -663,14 +680,14 @@ class TestDeliveryIsIdempotent:
         results = await asyncio.gather(*[_ingest(slow, job) for _ in range(6)])
 
         assert slow.most_in_flight == 1
-        outcomes = {r.outcome for r in results}
-        assert IngestionOutcome.VERIFIED in outcomes
-        assert outcomes <= {
-            IngestionOutcome.VERIFIED,
+        outcomes = [r.outcome for r in results]
+        assert outcomes.count(IngestionOutcome.PARSED) == 1
+        assert set(outcomes) <= {
+            IngestionOutcome.PARSED,
             IngestionOutcome.SKIPPED_IN_PROGRESS,
+            IngestionOutcome.SKIPPED_PARSED,
         }
-        assert IngestionOutcome.SKIPPED_IN_PROGRESS in outcomes
-        assert (await _row(committing_session, job.document_id))["status"] == "pending"
+        assert (await _row(committing_session, job.document_id))["status"] == "parsed"
 
     async def test_an_interrupted_delivery_puts_the_document_back(
         self, committing_session: Any, storage: LocalStorage
@@ -698,7 +715,7 @@ class TestDeliveryIsIdempotent:
 
         row = await _row(committing_session, job.document_id)
         assert (row["status"], row["failure_reason"]) == ("pending", None)
-        assert (await _ingest(storage, job)).outcome is IngestionOutcome.VERIFIED
+        assert (await _ingest(storage, job)).outcome is IngestionOutcome.PARSED
 
     async def test_a_claim_taken_by_the_reaper_is_not_overwritten(
         self, committing_session: Any, storage: LocalStorage, tmp_path: Path
@@ -714,7 +731,7 @@ class TestDeliveryIsIdempotent:
         async def reaper_intervenes() -> None:
             async with get_sessionmaker()() as other:
                 await _backdate(other, job.document_id, 10_000)
-                await IngestionService(other, storage).reap_stale_processing(
+                await _service(other, storage).reap_stale_processing(
                     stale_after_seconds=60
                 )
 
@@ -788,7 +805,7 @@ class TestFailuresArePersistedSafely:
             await _ingest(storage, broken)
 
         events = {e["event"] for e in logs}
-        assert {"ingestion.claimed", "ingestion.verified", "ingestion.failed"} <= events
+        assert {"ingestion.claimed", "ingestion.parsed", "ingestion.failed"} <= events
         everything = repr(logs)
         for secret in (str(tmp_path), "paper.pdf", "SECRET-MANUSCRIPT", "%PDF"):
             assert secret not in everything, secret
@@ -802,7 +819,7 @@ class TestFailuresArePersistedSafely:
 class TestTheReaper:
     async def _reap(self, storage: Any, seconds: int = 900) -> list[str]:
         async with get_sessionmaker()() as session:
-            return await IngestionService(session, storage).reap_stale_processing(
+            return await _service(session, storage).reap_stale_processing(
                 stale_after_seconds=seconds
             )
 

@@ -249,7 +249,7 @@ class TestTheArqQueue:
 
 
 class TestUploadThroughTheWorker:
-    async def test_an_upload_is_consumed_and_verified_by_a_real_worker(
+    async def test_an_upload_is_consumed_and_parsed_by_a_real_worker(
         self, committing_session: Any, api_client: Any, storage_root: Path
     ) -> None:
         """No queue override: the API's real provider writes to Redis."""
@@ -267,7 +267,7 @@ class TestUploadThroughTheWorker:
         worker = await _run_worker()
 
         assert (worker.jobs_complete, worker.jobs_failed) == (1, 0)
-        assert await _status(document_id) == ("pending", None)
+        assert await _status(document_id) == ("parsed", None)
         assert await _queued_job_ids() == []
 
     async def test_a_tampered_upload_fails_in_the_worker(
@@ -344,7 +344,7 @@ class TestTheWorkerTask:
 
         assert worker.jobs_retried == 2
         assert flaky.gets == 3
-        assert await _status(job.document_id) == ("pending", None)
+        assert await _status(job.document_id) == ("parsed", None)
 
     async def test_retries_end_in_a_terminal_failure_not_an_endless_loop(
         self, committing_session: Any, storage_root: Path

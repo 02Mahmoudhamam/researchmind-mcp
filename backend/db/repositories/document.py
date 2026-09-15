@@ -249,6 +249,7 @@ class DocumentRepository:
                 DocumentORM.storage_key,
                 DocumentORM.content_hash,
                 DocumentORM.mime_type,
+                DocumentORM.page_count,
             ).where(
                 DocumentORM.id == target,
                 DocumentORM.user_id == owner,
@@ -265,6 +266,7 @@ class DocumentRepository:
             storage_key=row.storage_key,
             content_hash=row.content_hash,
             mime_type=row.mime_type,
+            page_count=row.page_count,
         )
 
     async def live_document_exists(self, document_id: str) -> bool:
@@ -387,6 +389,7 @@ class DocumentRepository:
                 DocumentORM.storage_key,
                 DocumentORM.content_hash,
                 DocumentORM.mime_type,
+                DocumentORM.page_count,
             )
             .where(
                 DocumentORM.status == DocumentStatus.PENDING,
@@ -406,6 +409,7 @@ class DocumentRepository:
                 storage_key=row.storage_key,
                 content_hash=row.content_hash,
                 mime_type=row.mime_type,
+                page_count=row.page_count,
             )
             for row in result.all()
         ]
