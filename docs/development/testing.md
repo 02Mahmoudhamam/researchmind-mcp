@@ -139,6 +139,13 @@ sets alongside a `redis:7-alpine` service, an unreachable Redis is a hard error.
 Tests use Redis **database 15** (`REDIS_DB` in `tests/conftest.py`) and flush it
 around each worker test, so a developer's database 0 is never wiped.
 
+Tests of PDF extraction (M3/S3.3) run PyMuPDF in real worker processes, as the
+worker does. The functions a test runs *inside* that process — one that sleeps
+past its deadline, one that crashes — live in `tests/extraction_helpers.py`,
+because a function must be importable by module path to cross the process
+boundary. Each such test bounds itself with its own deadline, so a broken
+timeout fails the test instead of hanging the suite.
+
 Every test *not* marked `redis` gets the upload route's ingestion queue replaced
 by an in-memory one that accepts jobs (an autouse fixture in `conftest.py`), so an
 upload test does not start failing with 503 on a machine without Redis. Tests

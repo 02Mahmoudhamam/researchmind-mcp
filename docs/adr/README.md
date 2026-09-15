@@ -20,6 +20,7 @@ supersedes the old one, so the reasoning history stays intact.
 | [0008](0008-local-content-addressed-object-storage.md) | Local content-addressed object storage for uploads | Accepted |
 | [0009](0009-arq-for-asynchronous-ingestion.md) | ARQ over Redis for asynchronous ingestion | Accepted |
 | [0010](0010-per-owner-idempotent-upload.md) | Per-owner idempotent upload over content-addressed storage | Proposed |
+| [0011](0011-pdf-text-extraction-stage.md) | PDF text extraction: a `parsed` stage, per-page storage, a killable parser | Proposed |
 
 ## Statuses
 

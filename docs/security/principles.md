@@ -126,6 +126,12 @@ See [ADR-0008](../adr/0008-local-content-addressed-object-storage.md).
 **Uploads are validated before they are stored** — magic-byte MIME sniffing
 (never the client `Content-Type`), size cap, page cap, encrypted-PDF rejection.
 
+**Extracted text is cleaned before it is stored** *(M3/S3.3)*: control and
+format characters — including bidirectional overrides and zero-width characters,
+which make text read unlike what it says — are removed, and the parser that
+extracts it is handed verified bytes only, never a path, owner or identity. A
+PDF gets a bounded amount of time: past it, the process parsing it is killed.
+
 *Enforced since M3/S3.1* (`document_processing/validation.py`). "Encrypted" is
 interpreted as **cannot be opened without a password**: an owner-password-only
 PDF opens and reads normally and is accepted. The owner of an upload is

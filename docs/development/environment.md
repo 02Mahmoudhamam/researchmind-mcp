@@ -103,6 +103,10 @@ Tests set `STORAGE_ROOT` to a per-run temporary directory in `tests/conftest.py`
 | `INGEST_JOB_TIMEOUT_SECONDS` | `300` | ARQ cancels a job that runs longer. Must be positive |
 | `INGEST_MAX_TRIES` | `5` | Attempts for a transient failure, the first included; the last records `failed`. Must be positive |
 | `INGEST_STALE_PROCESSING_SECONDS` | `900` | The reaper fails a document `processing` for longer. **Must be greater than `INGEST_JOB_TIMEOUT_SECONDS`** — `Settings` refuses to start otherwise, because a threshold at or below the timeout could fail a job that is still running |
+| `INGEST_PARSE_TIMEOUT_SECONDS` | `180` | *(M3/S3.3)* Budget for extracting one PDF's text; past it the parsing process is killed and the document fails as `pdf_timeout`. Must be positive and **less than `INGEST_JOB_TIMEOUT_SECONDS`** — otherwise ARQ would cancel the job before the document could record why. See [pdf-extraction.md](pdf-extraction.md#time) |
+
+The page cap the worker enforces is `MAX_PDF_PAGES`, the same setting upload
+uses — not a second one.
 
 The API and the worker read the same variables — including `STORAGE_ROOT`,
 `DATABASE_URL` and `REDIS_*`, which must agree between them. Under
