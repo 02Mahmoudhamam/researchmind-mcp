@@ -37,6 +37,8 @@ EXPECTED_CONSTRAINTS = {
     # M3/S3.1 (migration 0003)
     "ck_documents_size_bytes_positive",
     "ck_documents_page_count_positive",
+    # M3/S3.2 (migration 0004)
+    "ck_documents_failure_reason_iff_failed",
     "pk_document_chunks",
     "fk_document_chunks_document_id_documents",
     "uq_document_chunks_document_id_chunk_index",
@@ -243,5 +245,5 @@ class TestLifecycle:
         result = alembic("heads")
 
         assert result.returncode == 0, result.stderr
-        assert "0003" in result.stdout
+        assert "0004" in result.stdout
         assert result.stdout.count("(head)") == 1, "more than one head — branched"

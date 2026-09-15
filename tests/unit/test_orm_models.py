@@ -58,6 +58,8 @@ class TestTables:
                     "size_bytes",
                     "mime_type",
                     "page_count",
+                    # M3/S3.2, ADR-0009 §4
+                    "failure_reason",
                     "created_at",
                     "updated_at",
                     "deleted_at",

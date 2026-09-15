@@ -14,10 +14,25 @@ class DocumentType(str, Enum):
 
 
 class DocumentStatus(str, Enum):
+    """Where a document is in ingestion — ADR-0009 §4.
+
+    PENDING → PROCESSING → READY | FAILED
+
+    * PENDING    accepted and stored; not currently being worked on
+    * PROCESSING a worker holds the claim and is working on it now
+    * READY      its content has been processed and is available downstream —
+                 which, per ADR-0009 and the M3 definition of done, means parsed
+                 and chunked. Nothing in M3/S3.2 produces it.
+    * FAILED     permanently unprocessable; `failure_reason` says why
+
+    FAILED replaced the scaffold's ERROR in M3/S3.2 (migration 0004). ADR-0009,
+    the accepted decision, names it FAILED; nothing had ever written ERROR.
+    """
+
     PENDING = "pending"
     PROCESSING = "processing"
     READY = "ready"
-    ERROR = "error"
+    FAILED = "failed"
 
 
 class DocumentMetadata(BaseModel):
