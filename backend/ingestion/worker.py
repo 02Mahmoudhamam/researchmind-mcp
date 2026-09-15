@@ -57,6 +57,7 @@ async def startup(ctx: dict[str, Any]) -> None:
     storage: Storage = LocalStorage(settings.STORAGE_ROOT)
     ctx["storage"] = storage
     ctx["ingest_max_tries"] = settings.INGEST_MAX_TRIES
+    ctx["stale_processing_seconds"] = settings.INGEST_STALE_PROCESSING_SECONDS
     _log.info("ingestion.worker.started")
 
 
@@ -111,3 +112,11 @@ async def ingest_document(ctx: dict[str, Any], payload: Any) -> dict[str, Any]:
             )
             raise Retry(defer=retry_delay_seconds(job_try)) from exc
     return result.model_dump(mode="json")
+
+
+async def reap_stale_processing(ctx: dict[str, Any]) -> list[str]:
+    """Cron: fail documents whose claim has outlived any worker (ADR-0009 §6)."""
+    async with get_sessionmaker()() as session:
+        return await IngestionService(session, ctx["storage"]).reap_stale_processing(
+            stale_after_seconds=int(ctx["stale_processing_seconds"])
+        )

@@ -193,6 +193,29 @@ class IngestionService:
             outcome=IngestionOutcome.VERIFIED, document_id=job.document_id
         )
 
+    async def reap_stale_processing(self, *, stale_after_seconds: int) -> list[str]:
+        """Fail documents whose claim has outlived any possible worker (ADR-0009 §6).
+
+        The caller supplies a threshold greater than the job timeout; Settings
+        refuses any other configuration. Commits, and returns the ids reaped.
+        """
+        try:
+            reaped = await self._documents.fail_stale_processing(
+                stale_after_seconds=stale_after_seconds,
+                failure_reason=IngestionReason.STALE_PROCESSING.value,
+            )
+            await self._session.commit()
+        except Exception:
+            await self._session.rollback()
+            raise
+        for document_id in reaped:
+            _log.warning(
+                "ingestion.reaped",
+                document_id=document_id,
+                reason=IngestionReason.STALE_PROCESSING.value,
+            )
+        return reaped
+
     # --- helpers --------------------------------------------------------------
 
     @staticmethod

@@ -19,9 +19,10 @@ The ingestion worker (M3/S3.2) has no Principal, but it has an owner: the
 `owner_id` its job carries. It uses the same rule — its reads and every status
 transition put that owner in the WHERE clause, so a job naming the wrong owner
 cannot touch the document even if the worker's own comparison were removed.
-One method is a deliberate, documented exception, and it returns no row:
-`live_document_exists`, a boolean, to tell a forged job from a deleted document
-in operator logs.
+Two methods are deliberate, documented exceptions, and neither returns a row:
+`live_document_exists` (a boolean, to tell a forged job from a deleted document
+in operator logs) and `fail_stale_processing` (the reaper, which is system
+maintenance across every owner by definition).
 """
 
 from typing import Any, cast
@@ -329,3 +330,36 @@ class DocumentRepository:
             .values(status=new, failure_reason=failure_reason, updated_at=func.now())
         )
         return bool(cast("CursorResult[Any]", result).rowcount)
+
+    async def fail_stale_processing(
+        self, *, stale_after_seconds: int, failure_reason: str
+    ) -> list[str]:
+        """Fail every live document stuck in `processing` too long. The reaper.
+
+        The second documented exception to the owner rule: finding abandoned
+        claims is maintenance over the whole table, and there is no owner to
+        scope it to. It changes only `status`, `failure_reason` and `updated_at`,
+        only on rows still `processing`, and returns their ids — never content.
+
+        Age is measured on the database clock against `updated_at`, which every
+        transition stamps, so a claim is stale only when nothing has moved it
+        for `stale_after_seconds`. The caller guarantees that threshold exceeds
+        the job timeout, so no running worker's claim can qualify.
+        """
+        result = await self._session.execute(
+            update(DocumentORM)
+            .where(
+                DocumentORM.status == DocumentStatus.PROCESSING,
+                DocumentORM.deleted_at.is_(None),
+                DocumentORM.updated_at
+                < func.now()
+                - func.make_interval(0, 0, 0, 0, 0, 0, stale_after_seconds),
+            )
+            .values(
+                status=DocumentStatus.FAILED,
+                failure_reason=failure_reason,
+                updated_at=func.now(),
+            )
+            .returning(DocumentORM.id)
+        )
+        return [str(document_id) for document_id in result.scalars().all()]

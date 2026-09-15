@@ -8,11 +8,17 @@ without a restart — and it is why this lives apart from the task functions,
 which tests import freely.
 """
 
+from arq import cron
 from arq.worker import func
 
 from backend.config.settings import get_settings
 from backend.ingestion.queue import INGEST_DOCUMENT_TASK, redis_settings_from
-from backend.ingestion.worker import ingest_document, shutdown, startup
+from backend.ingestion.worker import (
+    ingest_document,
+    reap_stale_processing,
+    shutdown,
+    startup,
+)
 
 _settings = get_settings()
 
@@ -24,6 +30,18 @@ class WorkerSettings:
             name=INGEST_DOCUMENT_TASK,
             max_tries=_settings.INGEST_MAX_TRIES,
             timeout=_settings.INGEST_JOB_TIMEOUT_SECONDS,
+        )
+    ]
+    # Every minute, and once at startup so a worker that comes back after an
+    # outage clears abandoned claims straight away. `unique` stops two workers
+    # reaping the same minute twice.
+    cron_jobs = [
+        cron(
+            reap_stale_processing,
+            minute=set(range(60)),
+            second=0,
+            run_at_startup=True,
+            unique=True,
         )
     ]
     on_startup = startup
