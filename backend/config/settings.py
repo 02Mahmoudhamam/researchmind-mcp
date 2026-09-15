@@ -93,6 +93,25 @@ class Settings(BaseSettings):
     MAX_UPLOAD_BYTES: int = 50 * 1024 * 1024
     MAX_PDF_PAGES: int = 500
 
+    # Ingestion worker (ADR-0009)
+    #
+    # ARQ_MAX_JOBS and INGEST_JOB_TIMEOUT_SECONDS are the names
+    # docs/development/environment.md reserved for M3. The other two arrive with
+    # the behaviour that needs them:
+    #
+    # INGEST_MAX_TRIES bounds retries of *transient* failures — ADR-0009 §5,
+    # "never infinite retry". The last attempt records a terminal failure
+    # instead of retrying again.
+    #
+    # INGEST_STALE_PROCESSING_SECONDS is how long a document may sit in
+    # `processing` before the reaper declares its worker gone (ADR-0009 §6). It
+    # must exceed the job timeout: ARQ cancels a job at the timeout, so anything
+    # older has no live worker — and anything younger might.
+    ARQ_MAX_JOBS: int = 10
+    INGEST_JOB_TIMEOUT_SECONDS: int = 300
+    INGEST_MAX_TRIES: int = 5
+    INGEST_STALE_PROCESSING_SECONDS: int = 900
+
     # Qdrant
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
@@ -187,6 +206,35 @@ class Settings(BaseSettings):
                 f"insecure secret configuration for APP_ENV={self.APP_ENV!r}: "
                 + "; ".join(problems)
                 + ". Set real values; see docs/development/environment.md."
+            )
+        return self
+
+    @field_validator(
+        "ARQ_MAX_JOBS",
+        "INGEST_JOB_TIMEOUT_SECONDS",
+        "INGEST_MAX_TRIES",
+        "INGEST_STALE_PROCESSING_SECONDS",
+    )
+    @classmethod
+    def _require_positive_worker_setting(cls, value: int) -> int:
+        """Zero jobs, zero tries or a zero timeout is a worker that does nothing."""
+        if value <= 0:
+            raise ValueError("ingestion worker settings must be positive integers")
+        return value
+
+    @model_validator(mode="after")
+    def _stale_threshold_must_outlive_the_job_timeout(self) -> "Settings":
+        """The reaper must never be able to fail a job that is still running.
+
+        ARQ cancels a job once it has run for INGEST_JOB_TIMEOUT_SECONDS, so a
+        document still `processing` after longer than that has no worker left.
+        A threshold at or below the timeout would let the reaper fail documents
+        whose worker is alive and within its budget.
+        """
+        if self.INGEST_STALE_PROCESSING_SECONDS <= self.INGEST_JOB_TIMEOUT_SECONDS:
+            raise ValueError(
+                "INGEST_STALE_PROCESSING_SECONDS must be greater than "
+                "INGEST_JOB_TIMEOUT_SECONDS"
             )
         return self
 
