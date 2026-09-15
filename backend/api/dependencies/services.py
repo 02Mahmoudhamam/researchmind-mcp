@@ -25,7 +25,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.dependencies.database import get_db_session
 from backend.config.settings import get_settings
-from backend.ingestion import DeferredIngestionQueue
+from backend.ingestion import ArqIngestionQueue
+from backend.ingestion.queue import redis_settings_from
 from backend.services.auth_service import AuthService
 from backend.services.document_service import DocumentService
 from backend.storage import LocalStorage
@@ -45,12 +46,13 @@ def get_storage() -> Storage:
 
 
 def get_ingestion_queue() -> IngestionQueue:
-    """Where accepted uploads are handed off (ADR-0009).
+    """Where accepted uploads are handed off: ARQ over Redis (ADR-0009).
 
-    The deferred queue until M3/S3.2 brings the ARQ worker; replacing it is a
-    change to this function and nothing else.
+    Swapped from M3/S3.1's deferred queue in M3/S3.2 by changing this function
+    and nothing else — the upload service depends on `IngestionQueue`, not on
+    ARQ. Reads settings per request, like `get_storage`.
     """
-    return DeferredIngestionQueue()
+    return ArqIngestionQueue(redis_settings_from(get_settings()))
 
 
 async def get_document_service(

@@ -14,6 +14,9 @@ services:
       # developer running the API on the host. Without this override the
       # container would look for PostgreSQL inside itself.
       DATABASE_URL: postgresql+asyncpg://researchmind:researchmind@postgres:5432/researchmind
+      # Same reason, for Redis. Since M3/S3.2 the API enqueues ingestion jobs to
+      # it, so the localhost default would make every upload fail with 503.
+      REDIS_HOST: redis
     depends_on:
       # Long form so `condition:` can be set. A bare `depends_on` list waits
       # only for the container to start, which for PostgreSQL means "the
@@ -24,6 +27,26 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+      redis:
+        condition: service_started
+    volumes:
+      - ./uploads:/app/uploads
+
+  # The ingestion worker (ADR-0009): the backend image, running ARQ instead of
+  # the API. It shares the upload volume, because it reads the stored PDFs, and
+  # needs the same database and Redis the API writes to.
+  worker:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.backend
+    command: ["arq", "backend.ingestion.worker_settings.WorkerSettings"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://researchmind:researchmind@postgres:5432/researchmind
+      REDIS_HOST: redis
+    depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_started
     volumes:

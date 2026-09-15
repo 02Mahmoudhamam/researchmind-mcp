@@ -1,31 +1,92 @@
-"""The ingestion queue as it stands in M3/S3.1: accepted, not yet consumed.
+"""The ingestion queue: ARQ over Redis (ADR-0009).
 
-ADR-0009 runs ingestion in an ARQ worker over Redis. That worker, its queue and
-its compose service are the next sprint's. Until then uploads still produce a
-complete, correct `IngestionJob` — owner, storage key, content hash — and hand
-it to this queue, which records that it was received and does nothing else.
+Replaces M3/S3.1's `DeferredIngestionQueue`, which accepted jobs and did nothing
+with them. The contract is unchanged — `IngestionQueue.enqueue(job)`, called only
+after the document row is committed — so the upload service did not change to
+use it; only the dependency provider did.
 
-This is stated rather than disguised. A document uploaded now is `pending`, the
-API says `pending`, and it stays `pending` until a worker exists to change it.
-Nothing here reports work that did not happen.
+What the API knows about ARQ is confined to this module: a task name, a job id
+and a connection. The worker that consumes the jobs is `backend/ingestion/worker.py`.
 """
 
+from arq import create_pool
+from arq.connections import RedisSettings
+
+from backend.config.settings import Settings
 from shared.models.ingestion import IngestionJob
 from shared.utils.logger import get_logger
 
 _log = get_logger(__name__)
 
+# The name the worker registers `ingest_document` under. One constant, imported
+# by both sides, so the producer and the consumer cannot disagree.
+INGEST_DOCUMENT_TASK = "ingest_document"
 
-class DeferredIngestionQueue:
-    """`IngestionQueue` with no consumer yet. Replaced by the ARQ queue in M3/S3.2."""
+
+def ingestion_job_id(document_id: str) -> str:
+    """ARQ job id for a document: one live job per document.
+
+    ARQ refuses to enqueue a job whose id is already queued or running, so a
+    second enqueue for the same document is a no-op rather than a second
+    worker racing the first. The database claim is still the real guard; this
+    keeps redundant work out of the queue in the first place.
+    """
+    return f"ingest-document:{document_id}"
+
+
+def redis_settings_from(settings: Settings, *, conn_retries: int = 0) -> RedisSettings:
+    """ARQ connection settings from application settings.
+
+    `conn_retries=0` for the API: ARQ's default retries a refused connection
+    five times a second apart, which would hold an upload request open for five
+    seconds before admitting Redis is down. One attempt, then an honest failure.
+    """
+    return RedisSettings(
+        host=settings.REDIS_HOST,
+        port=settings.REDIS_PORT,
+        database=settings.REDIS_DB,
+        conn_timeout=1,
+        conn_retries=conn_retries,
+    )
+
+
+class ArqIngestionQueue:
+    """`IngestionQueue` backed by ARQ.
+
+    A connection per enqueue rather than a pool held for the life of the
+    process. Uploads are infrequent and already slow — a PDF is read, hashed and
+    written first — so the connection costs nothing that matters, and nothing is
+    left bound to an event loop or needing to be closed at shutdown. Pooling is
+    a hardening decision for when upload volume makes it one.
+    """
+
+    def __init__(self, redis_settings: RedisSettings) -> None:
+        self._redis_settings = redis_settings
 
     async def enqueue(self, job: IngestionJob) -> None:
-        # Identifiers only. No filename and no content: neither is in the job,
-        # and neither belongs in a log line (principles.md §7).
+        """Queue the job. Raises if Redis cannot accept it.
+
+        The payload is the job as JSON-compatible values, not a pickled model:
+        the worker validates it back into an `IngestionJob`, so a job written by
+        one version of the code and read by another fails validation loudly
+        instead of unpickling into something subtly different.
+        """
+        redis = await create_pool(self._redis_settings)
+        try:
+            queued = await redis.enqueue_job(
+                INGEST_DOCUMENT_TASK,
+                job.model_dump(mode="json"),
+                _job_id=ingestion_job_id(job.document_id),
+            )
+        finally:
+            await redis.aclose()
         _log.info(
-            "ingestion.job.deferred",
+            (
+                "ingestion.job.enqueued"
+                if queued is not None
+                else "ingestion.job.already_queued"
+            ),
             document_id=job.document_id,
             owner_id=job.owner_id,
             content_hash=job.content_hash,
-            reason="no ingestion worker until M3/S3.2",
         )

@@ -3,7 +3,7 @@
 The real application over ASGI, real PostgreSQL, a real filesystem under
 `tmp_path`, and real PDFs. The one seam replaced is the ingestion queue, with a
 recorder, because asserting what the worker is handed is the point of the
-boundary and there is no worker yet (ADR-0009, next sprint).
+boundary; the worker itself is tested in test_ingestion_worker.py (M3/S3.2).
 
 Every layer M1 and M2 built is exercised again here, through a route that now
 writes: authentication (401), authorisation (403), identity from the Principal
@@ -28,7 +28,7 @@ from backend.api.dependencies.services import get_ingestion_queue
 from backend.config.settings import get_settings
 from backend.db.models import UserORM
 from backend.db.repositories import DocumentRepository, UserRepository
-from backend.ingestion import DeferredIngestionQueue
+from backend.ingestion import ArqIngestionQueue
 from backend.security.jwt_handler import JWTHandler
 from backend.storage import LocalStorage
 from shared.models.ingestion import IngestionJob
@@ -900,18 +900,13 @@ class TestTheIngestionHandOff:
             "mime_type",
         }
 
-    async def test_the_default_queue_defers_honestly(
-        self, api_client: Any, committing_session: Any, storage_root: Path
-    ) -> None:
-        """With no override: the real provider, a logged deferral, status pending."""
-        assert isinstance(get_ingestion_queue(), DeferredIngestionQueue)
-        _, headers = await _account(committing_session)
+    def test_the_default_queue_is_arq(self) -> None:
+        """M3/S3.2 swapped S3.1's deferred queue for ARQ — in the provider alone.
 
-        with capture_logs() as logs:
-            response = await _upload(api_client, headers, make_pdf())
-
-        assert response.json()["status"] == "pending"
-        assert [e for e in logs if e["event"] == "ingestion.job.deferred"]
+        This suite replaces the queue with a recorder; the real queue against a
+        real Redis is tests/integration/test_ingestion_worker.py.
+        """
+        assert isinstance(get_ingestion_queue(), ArqIngestionQueue)
 
 
 # =============================================================================
