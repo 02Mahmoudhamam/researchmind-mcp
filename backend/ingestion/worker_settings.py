@@ -16,6 +16,7 @@ from backend.ingestion.queue import INGEST_DOCUMENT_TASK, redis_settings_from
 from backend.ingestion.worker import (
     ingest_document,
     reap_stale_processing,
+    recover_pending_documents,
     shutdown,
     startup,
 )
@@ -42,7 +43,17 @@ class WorkerSettings:
             second=0,
             run_at_startup=True,
             unique=True,
-        )
+        ),
+        # Every minute on the half-minute, so it never lands on the reaper's
+        # second, and at startup, so a worker returning from an outage picks up
+        # documents stranded while it was gone (M3/S3.3).
+        cron(
+            recover_pending_documents,
+            minute=set(range(60)),
+            second=30,
+            run_at_startup=True,
+            unique=True,
+        ),
     ]
     on_startup = startup
     on_shutdown = shutdown

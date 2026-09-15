@@ -33,7 +33,11 @@ from backend.ingestion.queue import (
     ingestion_job_id,
     redis_settings_from,
 )
-from backend.ingestion.worker import ingest_document, reap_stale_processing
+from backend.ingestion.worker import (
+    ingest_document,
+    reap_stale_processing,
+    recover_pending_documents,
+)
 from backend.security.jwt_handler import JWTHandler
 from backend.services.document_service import DocumentService
 from backend.storage import LocalStorage
@@ -74,8 +78,9 @@ class RecordingQueue:
     def __init__(self) -> None:
         self.jobs: list[IngestionJob] = []
 
-    async def enqueue(self, job: IngestionJob) -> None:
+    async def enqueue(self, job: IngestionJob) -> bool:
         self.jobs.append(job)
+        return True
 
 
 # -------------------------------------------------------------------- fixtures
@@ -244,7 +249,7 @@ class TestTheArqQueue:
 
 
 class TestUploadThroughTheWorker:
-    async def test_an_upload_is_consumed_and_verified_by_a_real_worker(
+    async def test_an_upload_is_consumed_and_parsed_by_a_real_worker(
         self, committing_session: Any, api_client: Any, storage_root: Path
     ) -> None:
         """No queue override: the API's real provider writes to Redis."""
@@ -262,7 +267,7 @@ class TestUploadThroughTheWorker:
         worker = await _run_worker()
 
         assert (worker.jobs_complete, worker.jobs_failed) == (1, 0)
-        assert await _status(document_id) == ("pending", None)
+        assert await _status(document_id) == ("parsed", None)
         assert await _queued_job_ids() == []
 
     async def test_a_tampered_upload_fails_in_the_worker(
@@ -339,7 +344,7 @@ class TestTheWorkerTask:
 
         assert worker.jobs_retried == 2
         assert flaky.gets == 3
-        assert await _status(job.document_id) == ("pending", None)
+        assert await _status(job.document_id) == ("parsed", None)
 
     async def test_retries_end_in_a_terminal_failure_not_an_endless_loop(
         self, committing_session: Any, storage_root: Path
@@ -417,14 +422,18 @@ class TestTheWorkerEntrypoint:
 
         settings = get_settings()
         (function,) = WorkerSettings.functions
-        (reaper,) = WorkerSettings.cron_jobs
+        crons = {job.coroutine: job for job in WorkerSettings.cron_jobs}
+        reaper = crons[reap_stale_processing]
+        recovery = crons[recover_pending_documents]
 
         assert function.name == INGEST_DOCUMENT_TASK
         assert function.coroutine is ingest_document
         assert function.max_tries == settings.INGEST_MAX_TRIES
         assert function.timeout_s == settings.INGEST_JOB_TIMEOUT_SECONDS
-        assert reaper.coroutine is reap_stale_processing
+        assert len(crons) == len(WorkerSettings.cron_jobs) == 2
         assert reaper.run_at_startup is True
+        assert recovery.run_at_startup is True
+        assert recovery.unique is True
         assert WorkerSettings.keep_result == 0
         assert (
             settings.INGEST_STALE_PROCESSING_SECONDS

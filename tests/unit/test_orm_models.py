@@ -18,12 +18,19 @@ from shared.models.user import UserRole
 
 
 class TestTables:
-    def test_exactly_the_three_approved_tables_exist(self) -> None:
-        """S1.2 is authorised for User, Document and DocumentChunk only.
+    def test_exactly_the_approved_tables_exist(self) -> None:
+        """S1.2 was authorised for User, Document and DocumentChunk only.
 
-        Fails if a fourth entity is added without the authorisation to add it.
+        M3/S3.3 is authorised to add the smallest schema extracted text needs,
+        and adds `document_pages` — nothing else. Fails if any further entity
+        is added without the authorisation to add it.
         """
-        assert set(Base.metadata.tables) == {"users", "documents", "document_chunks"}
+        assert set(Base.metadata.tables) == {
+            "users",
+            "documents",
+            "document_chunks",
+            "document_pages",
+        }
 
     @pytest.mark.parametrize(
         ("table", "expected"),
@@ -77,6 +84,11 @@ class TestTables:
                     "dimension",
                     "created_at",
                 },
+            ),
+            (
+                # M3/S3.3: extracted text, one row per page.
+                "document_pages",
+                {"document_id", "page_number", "blocks", "created_at"},
             ),
         ],
     )
@@ -152,7 +164,11 @@ class TestAuthenticationBoundary:
 
     def test_no_token_or_session_table_appeared(self) -> None:
         """Still no server-side revocation (principles.md §6), and S2.3 adds none."""
-        assert set(Base.metadata.tables) == {"users", "documents", "document_chunks"}
+        assert not {
+            name
+            for name in Base.metadata.tables
+            if "token" in name or "session" in name
+        }
 
 
 class TestOwnership:
@@ -187,6 +203,16 @@ class TestOwnership:
         )
 
         assert fk.ondelete == "CASCADE"
+
+    def test_a_page_must_belong_to_a_document_and_goes_with_it(self) -> None:
+        """M3/S3.3. Extracted text is derived data: no document, no pages."""
+        column = Base.metadata.tables["document_pages"].c.document_id
+        (foreign_key,) = column.foreign_keys
+
+        assert column.nullable is False
+        assert foreign_key.column.table.name == "documents"
+        assert foreign_key.ondelete == "CASCADE"
+        assert column.primary_key, "(document_id, page_number) is the key"
 
 
 class TestEnums:

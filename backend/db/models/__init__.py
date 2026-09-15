@@ -11,6 +11,7 @@ Sprint M1/S1.3.
 
 from backend.db.models.document import DocumentORM
 from backend.db.models.document_chunk import DocumentChunkORM
+from backend.db.models.document_page import DocumentPageORM
 from backend.db.models.user import UserORM
 
-__all__ = ["DocumentChunkORM", "DocumentORM", "UserORM"]
+__all__ = ["DocumentChunkORM", "DocumentORM", "DocumentPageORM", "UserORM"]

@@ -19,10 +19,11 @@ The ingestion worker (M3/S3.2) has no Principal, but it has an owner: the
 `owner_id` its job carries. It uses the same rule — its reads and every status
 transition put that owner in the WHERE clause, so a job naming the wrong owner
 cannot touch the document even if the worker's own comparison were removed.
-Two methods are deliberate, documented exceptions, and neither returns a row:
+Three methods are deliberate, documented exceptions, and none returns content:
 `live_document_exists` (a boolean, to tell a forged job from a deleted document
-in operator logs) and `fail_stale_processing` (the reaper, which is system
-maintenance across every owner by definition).
+in operator logs), `fail_stale_processing` (the reaper) and
+`list_pending_for_recovery` (the recovery sweep, M3/S3.3) — the last two system
+maintenance across every owner by definition.
 """
 
 from typing import Any, cast
@@ -248,6 +249,7 @@ class DocumentRepository:
                 DocumentORM.storage_key,
                 DocumentORM.content_hash,
                 DocumentORM.mime_type,
+                DocumentORM.page_count,
             ).where(
                 DocumentORM.id == target,
                 DocumentORM.user_id == owner,
@@ -264,6 +266,7 @@ class DocumentRepository:
             storage_key=row.storage_key,
             content_hash=row.content_hash,
             mime_type=row.mime_type,
+            page_count=row.page_count,
         )
 
     async def live_document_exists(self, document_id: str) -> bool:
@@ -363,3 +366,50 @@ class DocumentRepository:
             .returning(DocumentORM.id)
         )
         return [str(document_id) for document_id in result.scalars().all()]
+
+    async def list_pending_for_recovery(self, *, limit: int) -> list[IngestionTarget]:
+        """Live `pending` documents that have stored content, oldest first.
+
+        The recovery sweep's read (M3/S3.3), and the third documented exception
+        to the owner rule: finding documents no job will pick up is maintenance
+        over the whole table, with no owner to scope it to. Each row carries its
+        own owner, and that persisted `user_id` is the only owner a recovered job
+        is ever given. Returns the fields a job is built from — ids, storage key,
+        hash, type — never content, never a filename.
+
+        Rows without stored content (created before upload existed) are not
+        candidates: there is nothing to ingest. `pending` only — `processing` is
+        the reaper's, and every other status is past what a job can do.
+        """
+        result = await self._session.execute(
+            select(
+                DocumentORM.id,
+                DocumentORM.user_id,
+                DocumentORM.status,
+                DocumentORM.storage_key,
+                DocumentORM.content_hash,
+                DocumentORM.mime_type,
+                DocumentORM.page_count,
+            )
+            .where(
+                DocumentORM.status == DocumentStatus.PENDING,
+                DocumentORM.deleted_at.is_(None),
+                DocumentORM.storage_key.is_not(None),
+                DocumentORM.content_hash.is_not(None),
+                DocumentORM.mime_type.is_not(None),
+            )
+            .order_by(DocumentORM.updated_at, DocumentORM.id)
+            .limit(limit)
+        )
+        return [
+            IngestionTarget(
+                document_id=str(row.id),
+                owner_id=str(row.user_id),
+                status=row.status,
+                storage_key=row.storage_key,
+                content_hash=row.content_hash,
+                mime_type=row.mime_type,
+                page_count=row.page_count,
+            )
+            for row in result.all()
+        ]

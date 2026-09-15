@@ -107,10 +107,17 @@ class Settings(BaseSettings):
     # `processing` before the reaper declares its worker gone (ADR-0009 §6). It
     # must exceed the job timeout: ARQ cancels a job at the timeout, so anything
     # older has no live worker — and anything younger might.
+    #
+    # INGEST_PARSE_TIMEOUT_SECONDS (M3/S3.3) is the budget for extracting a PDF's
+    # text, inside the job's own timeout: past it the parsing process is killed
+    # and the document fails as `pdf_timeout`. It must leave the job time to read,
+    # verify and persist around it — below the job timeout, or ARQ would cancel
+    # the job first and the document would never record why.
     ARQ_MAX_JOBS: int = 10
     INGEST_JOB_TIMEOUT_SECONDS: int = 300
     INGEST_MAX_TRIES: int = 5
     INGEST_STALE_PROCESSING_SECONDS: int = 900
+    INGEST_PARSE_TIMEOUT_SECONDS: int = 180
 
     # Qdrant
     QDRANT_HOST: str = "localhost"
@@ -214,6 +221,7 @@ class Settings(BaseSettings):
         "INGEST_JOB_TIMEOUT_SECONDS",
         "INGEST_MAX_TRIES",
         "INGEST_STALE_PROCESSING_SECONDS",
+        "INGEST_PARSE_TIMEOUT_SECONDS",
     )
     @classmethod
     def _require_positive_worker_setting(cls, value: int) -> int:
@@ -234,6 +242,22 @@ class Settings(BaseSettings):
         if self.INGEST_STALE_PROCESSING_SECONDS <= self.INGEST_JOB_TIMEOUT_SECONDS:
             raise ValueError(
                 "INGEST_STALE_PROCESSING_SECONDS must be greater than "
+                "INGEST_JOB_TIMEOUT_SECONDS"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _parse_budget_must_fit_inside_the_job_timeout(self) -> "Settings":
+        """A document that takes too long to parse must fail *as* too long.
+
+        Parsing runs inside the job. If its budget reached the job timeout, ARQ
+        would cancel the job before the budget ran out: the claim would be put
+        back, no reason recorded, and the recovery sweep would queue the same
+        hostile PDF again, and again.
+        """
+        if self.INGEST_PARSE_TIMEOUT_SECONDS >= self.INGEST_JOB_TIMEOUT_SECONDS:
+            raise ValueError(
+                "INGEST_PARSE_TIMEOUT_SECONDS must be less than "
                 "INGEST_JOB_TIMEOUT_SECONDS"
             )
         return self

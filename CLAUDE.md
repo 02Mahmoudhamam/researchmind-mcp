@@ -62,9 +62,9 @@ Frontend: Next.js 14 (App Router), React 18, TypeScript, Tailwind, axios, react-
 zustand, recharts.
 
 **Declared but never imported:** `anthropic`, `langchain-text-splitters` — these map to the
-remaining stubbed subsystems. `pymupdf` is imported as of M3/S3.1, by upload validation only
-(page count and password check, no text extraction), and `python-multipart` is exercised by
-the upload route. `passlib`
+remaining stubbed subsystems. `pymupdf` is imported as of M3/S3.1 by upload validation
+(page count and password check) and, as of M3/S3.3, by text extraction in the ingestion
+worker; `python-multipart` is exercised by the upload route. `passlib`
 was on this list from the scaffold onward and is **gone as of M2/S2.3**, replaced
 by `bcrypt` used directly: it was never imported once, and left installed it
 selects a hashing backend at import time, falling through to stdlib `crypt` —
@@ -125,17 +125,18 @@ stub returns the right type). There is **no RAG evaluation of any kind**.
 |---|---|---|
 | Domain models | [shared/models/](shared/models/) | **Complete** — best asset in the repo. `principal.py` (M2/S2.2) is the authenticated identity, distinct from `User` on purpose |
 | Interfaces (ABCs) | [shared/interfaces/](shared/interfaces/) | **Complete** — `BaseAgent`, `BaseVectorStore`, `BaseMemoryStore`. `BaseRepository` is **deliberately unimplemented**: its ID-only signatures cannot satisfy the ownership invariant (M1/S1.3) |
-| Repositories | [backend/db/repositories/](backend/db/repositories/) | **Complete (M1/S1.3)** — user, document, chunk; ownership in the SQL, not in a Python check. M3/S3.1 added the document storage fields and `find_live_by_content_hash_for_user`; M3/S3.2 the worker's owner-scoped read, compare-and-set status transition and stale-claim reaper update |
+| Repositories | [backend/db/repositories/](backend/db/repositories/) | **Complete (M1/S1.3)** — user, document, chunk; ownership in the SQL, not in a Python check. M3/S3.1 added the document storage fields and `find_live_by_content_hash_for_user`; M3/S3.2 the worker's owner-scoped read, compare-and-set status transition and stale-claim reaper update; M3/S3.3 `DocumentPageRepository` (extracted pages, owner-scoped through the document) and the recovery sweep's read |
 | Storage | [backend/storage/](backend/storage/), [shared/interfaces/storage.py](shared/interfaces/storage.py) | **Complete (M3/S3.1)** — `Storage` protocol and `LocalStorage`, content-addressed `{user_id}/{sha256}.pdf` (ADR-0008); atomic writes; filename never forms a path |
 | Upload validation | [document_processing/validation.py](document_processing/validation.py) | **Complete (M3/S3.1)** — magic bytes, size cap, page cap, password-protected refusal, filename sanitising. Structure only; parsing is still a stub |
-| Ingestion worker | [shared/models/ingestion.py](shared/models/ingestion.py), [backend/ingestion/](backend/ingestion/), [backend/services/ingestion_service.py](backend/services/ingestion_service.py) | **Complete (M3/S3.2)** — `ArqIngestionQueue`, an ARQ worker and compose service. Verifies each job against the database (owner-scoped) and the stored bytes against their SHA-256, persists `failed` with a reason code, retries transient failures a bounded number of times, reaps stale claims. **No processing stage yet**: a sound document is released back to `pending`, never `ready`. See [docs/development/ingestion.md](docs/development/ingestion.md) |
+| Ingestion worker | [shared/models/ingestion.py](shared/models/ingestion.py), [backend/ingestion/](backend/ingestion/), [backend/services/ingestion_service.py](backend/services/ingestion_service.py) | **Complete (M3/S3.2)** — `ArqIngestionQueue`, an ARQ worker and compose service. Verifies each job against the database (owner-scoped) and the stored bytes against their SHA-256, persists `failed` with a reason code, retries transient failures a bounded number of times, reaps stale claims, and re-queues `pending` documents no job will pick up (M3/S3.3). Since M3/S3.3 a verified PDF is parsed and becomes **`parsed`** — never `ready`, which means searchable. See [docs/development/ingestion.md](docs/development/ingestion.md) |
+| PDF text extraction | [document_processing/pdf_parser.py](document_processing/pdf_parser.py), [shared/interfaces/pdf_extraction.py](shared/interfaces/pdf_extraction.py) | **Complete (M3/S3.3)** — PyMuPDF block mode, column-aware reading order, cleaned text, per-page storage in `document_pages`; runs in a killable process under `INGEST_PARSE_TIMEOUT_SECONDS`. No OCR: a scan fails as `no_extractable_text`. See [docs/development/pdf-extraction.md](docs/development/pdf-extraction.md) and ADR-0011 (proposed) |
 | Settings | [backend/config/settings.py](backend/config/settings.py) | **Complete** (insecure secret defaults); validates `DATABASE_URL` uses the asyncpg driver |
-| DB infrastructure | [backend/db/](backend/db/) | **Complete (M1/S1.1)** — `Base` + naming convention, lazy async engine, session factory. Models and migrations `0001`–`0004` since (head `0004`, M3/S3.2: `failed` replaces `error`, `failure_reason` added) |
+| DB infrastructure | [backend/db/](backend/db/) | **Complete (M1/S1.1)** — `Base` + naming convention, lazy async engine, session factory. Models and migrations `0001`–`0005` since (head `0005`, M3/S3.3: `document_pages` and the `parsed` status) |
 | API routers | [backend/api/routers/](backend/api/routers/) | `auth`, `health`, and documents list/get/delete implemented. All 9 protected routes are authorised by permission; upload, search, agents and workspace answer **501** |
 | API schemas | [backend/api/schemas/](backend/api/schemas/) | **Complete** |
-| Services | [backend/services/](backend/services/) | `DocumentService` reads/deletes via repositories and owns the transaction (M1/S1.4); `upload_and_process` validates, stores, records and enqueues (M3/S3.1). Every method takes a **`Principal`, never a `user_id`** (M2/S2.5). **`AuthService` complete (M2/S2.4)** — register and login, bcrypt, JWT issuance. **`IngestionService` complete (M3/S3.2)** — the worker's decisions, committing each transition; imports no ARQ, FastAPI or storage backend. `SearchService` (M4) still a stub |
+| Services | [backend/services/](backend/services/) | `DocumentService` reads/deletes via repositories and owns the transaction (M1/S1.4); `upload_and_process` validates, stores, records and enqueues (M3/S3.1). Every method takes a **`Principal`, never a `user_id`** (M2/S2.5). **`AuthService` complete (M2/S2.4)** — register and login, bcrypt, JWT issuance. **`IngestionService` complete (M3/S3.2–S3.3)** — the worker's decisions, committing each transition, parsing through `PdfTextExtractor`; imports no ARQ, FastAPI, storage backend or PDF library. `SearchService` (M4) still a stub |
 | Security | [backend/security/](backend/security/) | `jwt_handler` complete (M2/S2.1); `authentication` + `get_current_user` complete and fail-closed (M2/S2.2); `passwords` complete — bcrypt, 12-char/72-byte policy, NFKC (M2/S2.3); **`rbac` + `require_permission` / `require_role` complete (M2/S2.5)** — 401 vs 403, role read fresh from the DB |
-| RAG pipeline | [document_processing/](document_processing/) | **All stubs** |
+| RAG pipeline | [document_processing/](document_processing/) | Extraction complete (S3.3); chunker, embedder, metadata extractor and `pipeline.py` **still stubs** |
 | Vector store | [vector_db/qdrant/](vector_db/qdrant/) | Client + config complete; repository all stubs |
 | Memory | [memory_system/redis/](memory_system/redis/) | Client + config complete; store stubbed **and orphaned** |
 | Agents (×9) | [agents/](agents/) | Identical templates; prompts + configs complete, `run()` is a stub |
@@ -184,15 +185,16 @@ Edges that **do not exist** despite being documented:
   unwraps `principal.user_id` for the unchanged repositories, and the document list, get
   and delete routes use it — and since M3/S3.1 upload does too, validating, storing at
   `{user_id}/{sha256}.pdf` and recording a `pending` document. Since M3/S3.2 an ARQ
-  worker checks each upload's ownership and bytes, but nothing *processes* its content
-  yet. And
+  worker checks each upload's ownership and bytes, and since M3/S3.3 extracts its text;
+  nothing chunks, embeds or searches it yet. And
   tokens are obtained over HTTP as of M2/S2.4: `POST /api/v1/auth/register`
   creates an account and `POST /api/v1/auth/login` issues a 60-minute access
   token that `get_current_user` accepts. `SearchService` remains a stub (M4).
-- **No processing pipeline yet.** Since M3/S3.2 upload enqueues to ARQ after commit and a
-  worker verifies the document, failing it with a persisted reason when its job or bytes
-  are wrong. Nothing parses, chunks or embeds it, so no document ever reaches `ready`, and
-  nothing re-enqueues a verified `pending` document for the stage that will.
+- **No chunking, embedding or search yet.** Since M3/S3.2 upload enqueues to ARQ after
+  commit and a worker verifies the document; since M3/S3.3 it extracts the text into
+  `document_pages` and the document becomes `parsed`, and a recovery sweep re-queues
+  `pending` documents with no job. Nothing chunks or embeds, so no document ever reaches
+  `ready`.
 - **No reranker, no hybrid/BM25 search, no query expansion.**
 
 ---
@@ -218,8 +220,9 @@ Qdrant will fail.
   `interface.py` (ABC subclass with `name`/`description`), `config.py` (an `AgentConfig`),
   `prompt.py` (`SYSTEM_PROMPT` + `build_prompt`), `service.py` (the concrete class).
 - **Async everywhere** for I/O (`AsyncQdrantClient`, `redis.asyncio`, `async def` routes).
-  Caution: `pymupdf` is a sync C-extension — calling it inside `async def parse()` without
-  a thread offload will block the event loop.
+  Caution: `pymupdf` is a sync C-extension — calling it inside `async def` without an
+  offload blocks the event loop. Upload validation offloads to a thread; text extraction
+  (M3/S3.3) runs in a killable process, because a thread cannot be stopped past a deadline.
 - **Stub idiom:** unimplemented bodies are a bare `...` with a `# TODO:` comment naming the
   intended approach. These TODOs are the design record — read them before implementing.
 - **Interface-first:** define the ABC in `shared/interfaces/`, implement in the owning package.
@@ -233,9 +236,10 @@ Qdrant will fail.
   `poetry check`, `poetry check --lock`, a runtime `import mcp` assertion and `pytest`.
   Frontend lint/type-check/build are enforced by `ci-frontend.yml`.
   **`mypy --strict` is enforced over the finished surface only**: M2's security files
-  (M2/S2.5), M3/S3.1's upload, storage and ingestion boundary, and M3/S3.2's ingestion
-  service, queue and worker pass strict with no ignores, and CI fails if they stop.
-  Repository-wide `mypy .` still reports **119 errors**, mostly `empty-body` in M3–M6
+  (M2/S2.5), M3/S3.1's upload, storage and ingestion boundary, M3/S3.2's ingestion
+  service, queue and worker, and M3/S3.3's extraction, extraction models and page
+  persistence pass strict with no ignores, and CI fails if they stop.
+  Repository-wide `mypy .` still reports **116 errors**, mostly `empty-body` in M3–M6
   stubs, and is not enforced; each sprint adds the files it makes real to the list in
   `ci-backend.yml`.
 

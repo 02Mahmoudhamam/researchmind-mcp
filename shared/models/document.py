@@ -14,16 +14,25 @@ class DocumentType(str, Enum):
 
 
 class DocumentStatus(str, Enum):
-    """Where a document is in ingestion — ADR-0009 §4.
+    """Where a document is in ingestion — ADR-0009 §4, with one stage added.
 
-    PENDING → PROCESSING → READY | FAILED
+    PENDING → PROCESSING → PARSED → … → READY
+                  ↘ FAILED (from any PROCESSING)
 
-    * PENDING    accepted and stored; not currently being worked on
+    * PENDING    accepted and stored; no stage has run to completion yet, and
+                 none is running now
     * PROCESSING a worker holds the claim and is working on it now
-    * READY      its content has been processed and is available downstream —
-                 which, per ADR-0009 and the M3 definition of done, means parsed
-                 and chunked. Nothing in M3/S3.2 produces it.
+    * PARSED     its text has been extracted and stored, page by page; it is not
+                 yet chunked, embedded or searchable (M3/S3.3)
+    * READY      processed and available downstream — per ADR-0009, the M3
+                 definition of done ("poll until ready, then search") and the
+                 project vision, chunked, embedded and searchable. Nothing
+                 produces it yet.
     * FAILED     permanently unprocessable; `failure_reason` says why
+
+    PARSED exists because READY must keep meaning "searchable": a client that
+    polls for READY and then searches cannot be told READY for a document with
+    no chunks. Stages after PARSED are later sprints'.
 
     FAILED replaced the scaffold's ERROR in M3/S3.2 (migration 0004). ADR-0009,
     the accepted decision, names it FAILED; nothing had ever written ERROR.
@@ -31,6 +40,7 @@ class DocumentStatus(str, Enum):
 
     PENDING = "pending"
     PROCESSING = "processing"
+    PARSED = "parsed"
     READY = "ready"
     FAILED = "failed"
 

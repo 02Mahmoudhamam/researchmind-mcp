@@ -550,3 +550,81 @@ class TestIngestionStaysBehindItsSeams:
 
         for forbidden in ("open(", "Path(", "read_bytes", "os.path"):
             assert forbidden not in code, forbidden
+
+
+class TestParsingStaysBehindItsSeams:
+    """M3/S3.3. A parser reads bytes and nothing else, and the service that
+    decides what a parse means never names the library that performs it."""
+
+    PARSER = ROOT / "document_processing" / "pdf_parser.py"
+    INGESTION_SERVICE = ROOT / "backend" / "services" / "ingestion_service.py"
+
+    @staticmethod
+    def _imports(path: pathlib.Path) -> set[str]:
+        import ast
+
+        names: set[str] = set()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                names.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                names.add(node.module or "")
+        return names
+
+    def test_the_parser_imports_no_framework_database_storage_or_identity(
+        self,
+    ) -> None:
+        """No path to a request, a Principal, the database, storage or the queue.
+
+        What the parser may import is written down exactly, so a new import is a
+        decision someone has to make here rather than a line that slips in.
+        """
+        assert self._imports(self.PARSER) == {
+            "unicodedata",
+            "dataclasses",
+            "typing",
+            "anyio",
+            "pymupdf",
+            "shared.interfaces.pdf_extraction",
+            "shared.models.extraction",
+        }
+
+    def test_the_parser_opens_no_file(self) -> None:
+        """Bytes in, text out: it is handed verified bytes, never a location."""
+        code = _statements(self.PARSER)
+
+        for forbidden in ("open(", "Path(", "read_bytes", "os.path", "LocalStorage"):
+            assert forbidden not in code, forbidden
+
+    def test_the_ingestion_service_names_no_pdf_library_or_parser(self) -> None:
+        code = _statements(self.INGESTION_SERVICE)
+
+        for forbidden in ("pymupdf", "fitz", "pdf_parser", "PyMuPDFTextExtractor"):
+            assert forbidden not in code, forbidden
+
+    def test_the_worker_is_the_only_place_the_parser_is_constructed(self) -> None:
+        """Its composition root, as the dependency providers are the API's."""
+        constructors = {
+            str(path.relative_to(ROOT))
+            for directory in ("backend", "shared", "mcp_server")
+            for path in sorted((ROOT / directory).rglob("*.py"))
+            if "__pycache__" not in path.parts
+            and "PyMuPDFTextExtractor(" in _statements(path)
+        }
+
+        assert constructors == {"backend/ingestion/worker.py"}
+
+    def test_nothing_in_the_request_path_imports_the_parser(self) -> None:
+        """Parsing is the worker's (ADR-0009): no route or API service reaches it."""
+        request_path = [
+            path
+            for directory in (
+                ROOT / "backend" / "api",
+                ROOT / "backend" / "security",
+            )
+            for path in sorted(directory.rglob("*.py"))
+            if "__pycache__" not in path.parts
+        ] + [ROOT / "backend" / "services" / "document_service.py"]
+
+        for path in request_path:
+            assert "document_processing.pdf_parser" not in self._imports(path), path

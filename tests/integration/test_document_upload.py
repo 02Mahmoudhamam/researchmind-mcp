@@ -59,7 +59,7 @@ class RecordingQueue:
         self.jobs: list[IngestionJob] = []
         self.committed_at_enqueue: list[bool] = []
 
-    async def enqueue(self, job: IngestionJob) -> None:
+    async def enqueue(self, job: IngestionJob) -> bool:
         from backend.db.session import get_sessionmaker
 
         async with get_sessionmaker()() as other:
@@ -71,6 +71,7 @@ class RecordingQueue:
             ).scalar_one_or_none()
         self.committed_at_enqueue.append(found == 1)
         self.jobs.append(job)
+        return True
 
 
 @pytest.fixture(autouse=True)
