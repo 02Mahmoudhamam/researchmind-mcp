@@ -1,7 +1,8 @@
 # Document upload and storage
 
 M3/S3.1. What happens between `POST /api/v1/documents/upload` and a `pending`
-document, and what does not happen yet.
+document. What the worker does with it afterwards is
+[ingestion.md](ingestion.md) (M3/S3.2).
 
 ```
 POST /api/v1/documents/upload   (multipart, field "file")
@@ -15,7 +16,7 @@ POST /api/v1/documents/upload   (multipart, field "file")
    ├─ deduplicate               200   this owner already has this content (ADR-0010)
    ├─ store                     503   Storage.put("{owner}/{sha256}.pdf")   (ADR-0008)
    ├─ record + commit           500   documents row, status "pending"
-   └─ enqueue IngestionJob            after the commit                       (ADR-0009)
+   └─ enqueue IngestionJob      503   after the commit, to ARQ over Redis    (ADR-0009)
    │
    ▼ 202  DocumentResponse
 ```
@@ -102,6 +103,7 @@ pretend otherwise; it compensates.
 | Insert/commit fails, file already existed | **500** | the file, which another row of this owner's references |
 | Insert loses a race to an identical upload | **200**, the winner | the winner's row and file |
 | Cleanup's own delete fails | **500** (the original error) | an orphaned file, logged as `document.upload.orphaned_blob` |
+| Redis refuses the job, after the commit *(M3/S3.2)* | **503** | nothing live — the row is soft-deleted and the file removed if this request created it. See [ingestion.md](ingestion.md#when-the-job-cannot-be-queued) |
 
 Not covered, and accepted by ADR-0008 as wasted disk rather than leaked data: a
 process crash between storing and committing, and a vanishingly narrow race in
@@ -123,24 +125,28 @@ After the commit, the service enqueues an `IngestionJob`:
 Frozen, and closed to extra fields. It carries no `Principal`, credential or
 filename. The worker must use `owner_id` as given and never look an owner up.
 
-**Until M3/S3.2 there is no worker.** The API uses `DeferredIngestionQueue`,
-which logs `ingestion.job.deferred` and does nothing else. Every uploaded
-document stays `pending`, and the API says `pending`.
+**Since M3/S3.2 the queue is `ArqIngestionQueue`** (job id
+`ingest-document:{document_id}`), and a worker consumes it: it verifies the
+job against the database and the bytes against the hash, and records `failed`
+with a reason when they are wrong. No stage processes content yet, so a sound
+document is still `pending` afterwards. The worker is
+[ingestion.md](ingestion.md). S3.1's `DeferredIngestionQueue`, which logged and
+did nothing, is gone.
 
 ## Logging
 
 `document.upload.stored`, `.deduplicated`, `.rejected` (with a reason code),
-`.storage_failed`, `.orphaned_blob`, and `ingestion.job.deferred` — carrying
+`.storage_failed`, `.orphaned_blob`, `.enqueue_failed`, and
+`ingestion.job.enqueued` / `.already_queued` — carrying
 document id, owner id, content hash, sizes and status. Never the filename,
 never file content, never a token; a test asserts all three.
 
 ## Discrepancies with the ADRs, recorded
 
-- **ADR-0009 names the terminal state `FAILED`; `DocumentStatus` has `ERROR`.**
-  S3.1 only ever sets `pending`, so the enum is unchanged. The worker sprint,
-  which first sets a failure state, should reconcile the two.
-- **ADR-0009 says upload enqueues to ARQ.** S3.1 builds the job and the queue
-  seam; ARQ, the worker process and its compose service are S3.2.
+- ~~**ADR-0009 names the terminal state `FAILED`; `DocumentStatus` has `ERROR`.**~~
+  **Reconciled in M3/S3.2:** `FAILED`, by migration `0004`.
+- ~~**ADR-0009 says upload enqueues to ARQ.**~~ **Done in M3/S3.2** — ARQ, the
+  worker process and its compose service.
 - **ADR-0008 lists `page_count` without saying when it is set.** It is set at
   upload, because principles.md §4's page cap has to be enforced before storage.
 - **Duplicate-row semantics were not specified anywhere.** ADR-0010 proposes

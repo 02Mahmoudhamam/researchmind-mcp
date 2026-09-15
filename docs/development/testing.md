@@ -122,6 +122,28 @@ fixture disposes the engine between tests. Swapping in `NullPool` for tests
 would also work and was rejected: it would mean the pooling configuration that
 actually ships is never exercised.
 
+## Tests that need Redis: the `redis` marker
+
+M3/S3.2. The ingestion queue and worker are tested against a **real Redis** and a
+real ARQ `Worker` in burst mode — nothing about ARQ is mocked. Those tests are
+marked `redis` (with `db`), and the rule is the same as for PostgreSQL:
+
+```bash
+docker compose up -d postgres redis
+env -u PYTHONPATH REQUIRE_DB=1 REQUIRE_REDIS=1 poetry run pytest
+```
+
+Without Redis they skip with a reason; with `REQUIRE_REDIS=1`, which Backend CI
+sets alongside a `redis:7-alpine` service, an unreachable Redis is a hard error.
+
+Tests use Redis **database 15** (`REDIS_DB` in `tests/conftest.py`) and flush it
+around each worker test, so a developer's database 0 is never wiped.
+
+Every test *not* marked `redis` gets the upload route's ingestion queue replaced
+by an in-memory one that accepts jobs (an autouse fixture in `conftest.py`), so an
+upload test does not start failing with 503 on a machine without Redis. Tests
+that assert what is queued install their own recording queue on top.
+
 ## Commands
 
 ```bash

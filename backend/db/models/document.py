@@ -119,6 +119,12 @@ class DocumentORM(Base):
     # enforced before the file is stored.
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # Why ingestion failed — ADR-0009 §4, "with the failure reason persisted".
+    # A stable code from `IngestionReason`, never an exception message: this
+    # column must be safe to show an operator and must not carry a path. Set if
+    # and only if `status` is `failed`, which a CHECK constraint enforces.
+    failure_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -169,6 +175,13 @@ class DocumentORM(Base):
         # NULL passes a CHECK, so rows without stored content are unaffected.
         CheckConstraint("size_bytes > 0", name="size_bytes_positive"),
         CheckConstraint("page_count > 0", name="page_count_positive"),
+        # A failed document always says why, and no other document carries a
+        # reason — so a stale reason cannot survive a status change, and a
+        # failure can never be recorded without one.
+        CheckConstraint(
+            "(status = 'failed') = (failure_reason IS NOT NULL)",
+            name="failure_reason_iff_failed",
+        ),
         # ADR-0010: one live document per owner per content. The constraint,
         # not the service's lookup, is what makes this true — two concurrent
         # uploads of the same file both pass a lookup. Partial on

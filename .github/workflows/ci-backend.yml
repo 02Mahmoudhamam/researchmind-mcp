@@ -10,6 +10,7 @@
 #   Milestone M0    ruff, black --check                    — now enforced
 #   Milestone M2    mypy --strict                          — enforced, SCOPED (M2/S2.5)
 #   Milestone M3    same gate, extended to upload & storage — M3/S3.1
+#                   and to the ingestion worker            — M3/S3.2
 #
 # mypy is promoted at M2 as scheduled, but over the finished surface only — not
 # the whole repository — and the scope is the honest part. `mypy .` still
@@ -20,9 +21,10 @@
 #
 # What *is* enforced: every file a finished sprint made real passes
 # `mypy --strict` with no ignores — M2's authentication, authorisation,
-# passwords, tokens, registration and login; and since M3/S3.1 upload
-# validation, content-addressed storage, the ingestion boundary and the document
-# service, repository and models. `--follow-imports=silent` limits reporting to
+# passwords, tokens, registration and login; since M3/S3.1 upload validation,
+# content-addressed storage, the ingestion boundary and the document service,
+# repository and models; and since M3/S3.2 the ingestion service, ARQ queue and
+# worker. `--follow-imports=silent` limits reporting to
 # the listed files while still type-checking against everything they import.
 # Each later sprint adds the files it makes real.
 name: Backend CI
@@ -67,12 +69,27 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+      # The ingestion job queue (ADR-0009, M3/S3.2). Tests marked `redis` run the
+      # real ARQ queue and a real worker against it — nothing about ARQ is mocked.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     env:
       DATABASE_URL: postgresql+asyncpg://researchmind:researchmind@localhost:5432/researchmind
       # Turns "database unreachable" from a skip into a failure. A skipped test
       # reports success, so without this the database coverage could disappear
       # from CI and nothing would say so.
       REQUIRE_DB: "1"
+      # The same, for Redis: without it the worker tests would skip, and a
+      # skipped test reports success.
+      REQUIRE_REDIS: "1"
 
     steps:
       - uses: actions/checkout@v7
@@ -129,7 +146,8 @@ jobs:
             shared/interfaces/ingestion.py \
             shared/models/ingestion.py \
             shared/models/document.py \
-            document_processing/validation.py
+            document_processing/validation.py \
+            backend/services/ingestion_service.py
 
       - name: Assert `import mcp` resolves to the SDK, not this repository
         run: |

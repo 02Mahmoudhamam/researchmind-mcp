@@ -501,3 +501,52 @@ class TestStorageIsReachedOnlyThroughItsContract:
 
         assert calls, "document_storage_key is never called — the check is vacuous"
         assert not offenders, offenders
+
+
+class TestIngestionStaysBehindItsSeams:
+    """M3/S3.2. The worker's decisions live in a service that knows no ARQ,
+    no HTTP and no storage backend; ARQ is confined to the ingestion package."""
+
+    INGESTION_SERVICE = ROOT / "backend" / "services" / "ingestion_service.py"
+
+    def test_the_ingestion_service_names_no_queue_framework_or_storage_backend(
+        self,
+    ) -> None:
+        code = _statements(self.INGESTION_SERVICE)
+
+        for forbidden in ("arq", "fastapi", "LocalStorage", "backend.storage"):
+            assert forbidden not in code, forbidden
+
+    def test_only_the_ingestion_package_imports_arq(self) -> None:
+        """The API depends on `IngestionQueue`; swapping ARQ touches one package."""
+        import ast
+
+        production = [
+            path
+            for directory in ("backend", "shared", "document_processing", "mcp_server")
+            for path in sorted((ROOT / directory).rglob("*.py"))
+            if "__pycache__" not in path.parts
+        ]
+        importers = set()
+        for path in production:
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                names = (
+                    [alias.name for alias in node.names]
+                    if isinstance(node, ast.Import)
+                    else [node.module or ""] if isinstance(node, ast.ImportFrom) else []
+                )
+                if any(name == "arq" or name.startswith("arq.") for name in names):
+                    importers.add(str(path.relative_to(ROOT)))
+
+        assert importers == {
+            "backend/ingestion/queue.py",
+            "backend/ingestion/worker.py",
+            "backend/ingestion/worker_settings.py",
+        }
+
+    def test_the_worker_reads_documents_only_through_storage(self) -> None:
+        """The task functions never open a path; the service reads via `Storage`."""
+        code = _statements(ROOT / "backend" / "ingestion" / "worker.py")
+
+        for forbidden in ("open(", "Path(", "read_bytes", "os.path"):
+            assert forbidden not in code, forbidden

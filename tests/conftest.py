@@ -36,6 +36,10 @@ _TEST_ENV: dict[str, str] = {
     "APP_ENV": "test",
     "DEBUG": "false",
     "LOG_LEVEL": "WARNING",
+    # Redis database 15, not 0. The ARQ worker tests flush their database before
+    # and after each test; on a developer's machine database 0 is the one
+    # docker compose's Redis is actually used with.
+    "REDIS_DB": "15",
 }
 
 for _key, _value in _TEST_ENV.items():
@@ -122,34 +126,108 @@ def _database_is_reachable() -> bool:
         return False
 
 
-def pytest_collection_modifyitems(config: object, items: list[pytest.Item]) -> None:
-    """Skip `db` tests when PostgreSQL is unreachable — unless CI forbids it.
+def _redis_is_reachable() -> bool:
+    """Open a real TCP connection to the configured Redis, once per run."""
+    import socket
+
+    host = os.environ.get("REDIS_HOST", "localhost")
+    port = int(os.environ.get("REDIS_PORT", "6379"))
+    try:
+        with socket.create_connection((host, port), 2.0):
+            return True
+    except OSError:
+        return False
+
+
+def _require_or_skip(
+    items: list[pytest.Item],
+    *,
+    reachable: bool,
+    required_by: str,
+    what: str,
+    how_to_start: str,
+) -> None:
+    """Skip `items` when their service is unreachable — or fail, if CI requires it.
 
     A skipped test reports success, so a skip that becomes permanent is
-    indistinguishable from coverage that was never written. `REQUIRE_DB=1`,
-    set by Backend CI, converts the skip into an error: locally the suite stays
-    runnable without Docker, and in CI the database coverage cannot vanish
-    quietly.
+    indistinguishable from coverage that was never written. `REQUIRE_DB=1` and
+    `REQUIRE_REDIS=1`, set by Backend CI, turn the skip into an error: locally
+    the suite stays runnable without Docker, and in CI the coverage cannot
+    vanish quietly.
     """
-    db_items = [item for item in items if item.get_closest_marker("db")]
-    if not db_items or _database_is_reachable():
+    if not items or reachable:
         return
-
-    dsn_host = os.environ["DATABASE_URL"].rsplit("@", 1)[-1]
-    if os.environ.get("REQUIRE_DB") == "1":
+    if os.environ.get(required_by) == "1":
         raise pytest.UsageError(
-            f"REQUIRE_DB=1 but PostgreSQL at {dsn_host} is unreachable, so "
-            f"{len(db_items)} database test(s) would be skipped. In CI this is "
-            f"a failure, not a skip."
+            f"{required_by}=1 but {what} is unreachable, so {len(items)} test(s) "
+            f"would be skipped. In CI this is a failure, not a skip."
         )
     marker = pytest.mark.skip(
-        reason=(
-            f"PostgreSQL at {dsn_host} is unreachable. Start it with "
-            f"`docker compose up -d postgres`."
-        )
+        reason=f"{what} is unreachable. Start it with `{how_to_start}`."
     )
-    for item in db_items:
+    for item in items:
         item.add_marker(marker)
+
+
+def pytest_collection_modifyitems(config: object, items: list[pytest.Item]) -> None:
+    """Gate `db` tests on PostgreSQL and `redis` tests on Redis."""
+    db_items = [item for item in items if item.get_closest_marker("db")]
+    if db_items:
+        dsn_host = os.environ["DATABASE_URL"].rsplit("@", 1)[-1]
+        _require_or_skip(
+            db_items,
+            reachable=_database_is_reachable(),
+            required_by="REQUIRE_DB",
+            what=f"PostgreSQL at {dsn_host}",
+            how_to_start="docker compose up -d postgres",
+        )
+
+    redis_items = [item for item in items if item.get_closest_marker("redis")]
+    if redis_items:
+        _require_or_skip(
+            redis_items,
+            reachable=_redis_is_reachable(),
+            required_by="REQUIRE_REDIS",
+            what="Redis",
+            how_to_start="docker compose up -d redis",
+        )
+
+
+class _AcceptingIngestionQueue:
+    """An `IngestionQueue` that accepts every job and keeps it in memory."""
+
+    def __init__(self) -> None:
+        self.jobs: list[Any] = []
+
+    async def enqueue(self, job: Any) -> None:
+        self.jobs.append(job)
+
+
+@pytest.fixture(autouse=True)
+def _ingestion_queue_without_redis(request: pytest.FixtureRequest) -> Any:
+    """Stand in for Redis wherever a test is not about Redis.
+
+    Since M3/S3.2 the API enqueues ingestion jobs to Redis. Most tests that
+    upload — authorisation matrices, storage, validation — are about something
+    else, and should not need a Redis server to run or fail when one is absent.
+    They get a queue that accepts jobs in memory.
+
+    Tests marked `redis` opt out and use the real provider against a real Redis;
+    that is where the ARQ queue and worker are tested. Tests that assert on the
+    jobs themselves install their own recorder, which replaces this one.
+    """
+    if request.node.get_closest_marker("redis"):
+        yield
+        return
+
+    from backend.api.app import app
+    from backend.api.dependencies.services import get_ingestion_queue
+
+    app.dependency_overrides[get_ingestion_queue] = _AcceptingIngestionQueue
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(get_ingestion_queue, None)
 
 
 @pytest.fixture
