@@ -23,7 +23,7 @@ pytestmark = [
     pytest.mark.usefixtures("engine_isolation", "migrated_schema"),
 ]
 
-EXPECTED_TABLES = {"users", "documents", "document_chunks"}
+EXPECTED_TABLES = {"users", "documents", "document_chunks", "document_pages"}
 
 EXPECTED_CONSTRAINTS = {
     "pk_users",
@@ -44,6 +44,11 @@ EXPECTED_CONSTRAINTS = {
     "uq_document_chunks_document_id_chunk_index",
     "ck_document_chunks_chunk_index_non_negative",
     "ck_document_chunks_dimension_positive",
+    # M3/S3.3 (migration 0005)
+    "pk_document_pages",
+    "fk_document_pages_document_id_documents",
+    "ck_document_pages_page_number_positive",
+    "ck_document_pages_blocks_is_array",
 }
 
 
@@ -141,6 +146,7 @@ class TestSchemaProducedByMigration:
 
         assert actions["fk_documents_user_id_users"] == "r"
         assert actions["fk_document_chunks_document_id_documents"] == "c"
+        assert actions["fk_document_pages_document_id_documents"] == "c"
 
     async def test_no_native_enum_types_were_created(self) -> None:
         """A native enum survives `drop_table` and breaks the downgrade.
@@ -245,5 +251,5 @@ class TestLifecycle:
         result = alembic("heads")
 
         assert result.returncode == 0, result.stderr
-        assert "0004" in result.stdout
+        assert "0005" in result.stdout
         assert result.stdout.count("(head)") == 1, "more than one head — branched"
