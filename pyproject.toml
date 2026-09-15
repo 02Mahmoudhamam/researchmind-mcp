@@ -57,7 +57,7 @@ anyio = "^4.0"
 # 0.28 is the newest release, and it accepts the locked redis 5.x (`redis<6`), so
 # adding it moves no existing pin. It pulls `hiredis` through the redis extra.
 arq = "^0.28.0"
-structlog = "^24.2.0"
+structlog = ">=24.2,<27.0"
 httpx = "^0.27.0"
 
 [tool.poetry.group.dev.dependencies]
