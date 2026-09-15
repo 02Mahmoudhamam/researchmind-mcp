@@ -105,6 +105,13 @@ another user's manuscript".
 **Deletion order is fixed:** soft-delete in PostgreSQL (committed first) →
 delete vectors in Qdrant → finalise. Never the reverse.
 
+**The same rule holds for queued work** *(enforced since M3/S3.2)*. An ingestion
+job is a claim about a document, not an authority over it. The worker reads the
+document scoped to the job's `owner_id`, rejects any job that disagrees with the
+row PostgreSQL holds, and reads storage only at the key the row records. A job
+cannot name another tenant's document into being processed, whatever wrote it to
+the queue. See [../development/ingestion.md](../development/ingestion.md).
+
 ## 4. Untrusted input
 
 **Uploaded documents are data, never instructions.** Document text reaching a

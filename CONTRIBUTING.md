@@ -17,6 +17,7 @@ Read first:
 - [docs/development/transactions.md](docs/development/transactions.md) — the service layer and who owns commit
 - [docs/development/authentication.md](docs/development/authentication.md) — how a request acquires an identity, and why a route cannot skip it
 - [docs/development/uploads.md](docs/development/uploads.md) — upload validation, content-addressed storage, duplicates, and the ingestion hand-off
+- [docs/development/ingestion.md](docs/development/ingestion.md) — the ARQ worker: status lifecycle, failure reasons, retries, idempotency and the stale-claim reaper
 - [docs/adr/](docs/adr/) — why the system is shaped this way
 - [docs/security/principles.md](docs/security/principles.md) — non-negotiable invariants
 

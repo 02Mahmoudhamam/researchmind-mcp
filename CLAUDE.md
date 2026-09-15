@@ -83,6 +83,7 @@ the `pydantic[email]` extra (M0/S0.1); before that, `shared/models/user.py` and
 | Backend API | `python main.py` → Uvicorn on `APP_PORT` (8000) | [main.py](main.py) |
 | FastAPI app object | `backend.api.app:app` | [backend/api/app.py](backend/api/app.py) |
 | MCP server (stdio) | `python -m mcp_server.server.server` | [mcp_server/server/server.py](mcp_server/server/server.py) |
+| Ingestion worker (M3/S3.2) | `arq backend.ingestion.worker_settings.WorkerSettings` | [backend/ingestion/worker_settings.py](backend/ingestion/worker_settings.py) |
 | Frontend | `npm run dev` in `frontend/` | [frontend/package.json](frontend/package.json) |
 | All services | `docker-compose up -d` — **currently broken, see below** | [docker-compose.yml](docker-compose.yml) |
 
@@ -124,15 +125,15 @@ stub returns the right type). There is **no RAG evaluation of any kind**.
 |---|---|---|
 | Domain models | [shared/models/](shared/models/) | **Complete** — best asset in the repo. `principal.py` (M2/S2.2) is the authenticated identity, distinct from `User` on purpose |
 | Interfaces (ABCs) | [shared/interfaces/](shared/interfaces/) | **Complete** — `BaseAgent`, `BaseVectorStore`, `BaseMemoryStore`. `BaseRepository` is **deliberately unimplemented**: its ID-only signatures cannot satisfy the ownership invariant (M1/S1.3) |
-| Repositories | [backend/db/repositories/](backend/db/repositories/) | **Complete (M1/S1.3)** — user, document, chunk; ownership in the SQL, not in a Python check. M3/S3.1 added the document storage fields and `find_live_by_content_hash_for_user` |
+| Repositories | [backend/db/repositories/](backend/db/repositories/) | **Complete (M1/S1.3)** — user, document, chunk; ownership in the SQL, not in a Python check. M3/S3.1 added the document storage fields and `find_live_by_content_hash_for_user`; M3/S3.2 the worker's owner-scoped read, compare-and-set status transition and stale-claim reaper update |
 | Storage | [backend/storage/](backend/storage/), [shared/interfaces/storage.py](shared/interfaces/storage.py) | **Complete (M3/S3.1)** — `Storage` protocol and `LocalStorage`, content-addressed `{user_id}/{sha256}.pdf` (ADR-0008); atomic writes; filename never forms a path |
 | Upload validation | [document_processing/validation.py](document_processing/validation.py) | **Complete (M3/S3.1)** — magic bytes, size cap, page cap, password-protected refusal, filename sanitising. Structure only; parsing is still a stub |
-| Ingestion boundary | [shared/models/ingestion.py](shared/models/ingestion.py), [backend/ingestion/](backend/ingestion/) | `IngestionJob` + `IngestionQueue` complete (M3/S3.1); the queue is `DeferredIngestionQueue` — **no worker until M3/S3.2**, so uploads stay `pending` |
+| Ingestion worker | [shared/models/ingestion.py](shared/models/ingestion.py), [backend/ingestion/](backend/ingestion/), [backend/services/ingestion_service.py](backend/services/ingestion_service.py) | **Complete (M3/S3.2)** — `ArqIngestionQueue`, an ARQ worker and compose service. Verifies each job against the database (owner-scoped) and the stored bytes against their SHA-256, persists `failed` with a reason code, retries transient failures a bounded number of times, reaps stale claims. **No processing stage yet**: a sound document is released back to `pending`, never `ready`. See [docs/development/ingestion.md](docs/development/ingestion.md) |
 | Settings | [backend/config/settings.py](backend/config/settings.py) | **Complete** (insecure secret defaults); validates `DATABASE_URL` uses the asyncpg driver |
-| DB infrastructure | [backend/db/](backend/db/) | **Complete (M1/S1.1)** — `Base` + naming convention, lazy async engine, session factory. Models and migrations `0001`–`0003` since (head `0003`, M3/S3.1) |
+| DB infrastructure | [backend/db/](backend/db/) | **Complete (M1/S1.1)** — `Base` + naming convention, lazy async engine, session factory. Models and migrations `0001`–`0004` since (head `0004`, M3/S3.2: `failed` replaces `error`, `failure_reason` added) |
 | API routers | [backend/api/routers/](backend/api/routers/) | `auth`, `health`, and documents list/get/delete implemented. All 9 protected routes are authorised by permission; upload, search, agents and workspace answer **501** |
 | API schemas | [backend/api/schemas/](backend/api/schemas/) | **Complete** |
-| Services | [backend/services/](backend/services/) | `DocumentService` reads/deletes via repositories and owns the transaction (M1/S1.4); `upload_and_process` validates, stores, records and enqueues (M3/S3.1). Every method takes a **`Principal`, never a `user_id`** (M2/S2.5). **`AuthService` complete (M2/S2.4)** — register and login, bcrypt, JWT issuance. `SearchService` (M4) still a stub |
+| Services | [backend/services/](backend/services/) | `DocumentService` reads/deletes via repositories and owns the transaction (M1/S1.4); `upload_and_process` validates, stores, records and enqueues (M3/S3.1). Every method takes a **`Principal`, never a `user_id`** (M2/S2.5). **`AuthService` complete (M2/S2.4)** — register and login, bcrypt, JWT issuance. **`IngestionService` complete (M3/S3.2)** — the worker's decisions, committing each transition; imports no ARQ, FastAPI or storage backend. `SearchService` (M4) still a stub |
 | Security | [backend/security/](backend/security/) | `jwt_handler` complete (M2/S2.1); `authentication` + `get_current_user` complete and fail-closed (M2/S2.2); `passwords` complete — bcrypt, 12-char/72-byte policy, NFKC (M2/S2.3); **`rbac` + `require_permission` / `require_role` complete (M2/S2.5)** — 401 vs 403, role read fresh from the DB |
 | RAG pipeline | [document_processing/](document_processing/) | **All stubs** |
 | Vector store | [vector_db/qdrant/](vector_db/qdrant/) | Client + config complete; repository all stubs |
@@ -182,14 +183,16 @@ Edges that **do not exist** despite being documented:
   permission or returns 403 (M2/S2.5). `DocumentService` receives that `Principal` and
   unwraps `principal.user_id` for the unchanged repositories, and the document list, get
   and delete routes use it — and since M3/S3.1 upload does too, validating, storing at
-  `{user_id}/{sha256}.pdf` and recording a `pending` document. Nothing *processes* an
-  upload yet: the ingestion worker is M3/S3.2. And
+  `{user_id}/{sha256}.pdf` and recording a `pending` document. Since M3/S3.2 an ARQ
+  worker checks each upload's ownership and bytes, but nothing *processes* its content
+  yet. And
   tokens are obtained over HTTP as of M2/S2.4: `POST /api/v1/auth/register`
   creates an account and `POST /api/v1/auth/login` issues a 60-minute access
   token that `get_current_user` accepts. `SearchService` remains a stub (M4).
-- **No task queue yet.** Upload builds an `IngestionJob` and hands it to a queue seam after
-  commit (M3/S3.1), but ARQ, the worker process and its compose service are M3/S3.2. Nothing
-  parses, chunks or embeds an uploaded document.
+- **No processing pipeline yet.** Since M3/S3.2 upload enqueues to ARQ after commit and a
+  worker verifies the document, failing it with a persisted reason when its job or bytes
+  are wrong. Nothing parses, chunks or embeds it, so no document ever reaches `ready`, and
+  nothing re-enqueues a verified `pending` document for the stage that will.
 - **No reranker, no hybrid/BM25 search, no query expansion.**
 
 ---
@@ -229,11 +232,12 @@ Qdrant will fail.
   pass and run on every push and PR via `.github/workflows/ci-backend.yml`, alongside
   `poetry check`, `poetry check --lock`, a runtime `import mcp` assertion and `pytest`.
   Frontend lint/type-check/build are enforced by `ci-frontend.yml`.
-  **`mypy --strict` is enforced over the M2 security surface only** (M2/S2.5): the 16
-  files M2 made real — authentication, authorisation, passwords, tokens, register/login —
-  pass strict with no ignores, and CI fails if they stop. Repository-wide `mypy .` still
-  reports **121 errors**, mostly `empty-body` in M3–M6 stubs, and is not enforced; each
-  milestone adds the files it makes real to the list in `ci-backend.yml`.
+  **`mypy --strict` is enforced over the finished surface only**: M2's security files
+  (M2/S2.5), M3/S3.1's upload, storage and ingestion boundary, and M3/S3.2's ingestion
+  service, queue and worker pass strict with no ignores, and CI fails if they stop.
+  Repository-wide `mypy .` still reports **119 errors**, mostly `empty-body` in M3–M6
+  stubs, and is not enforced; each sprint adds the files it makes real to the list in
+  `ci-backend.yml`.
 
 ---
 

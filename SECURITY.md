@@ -47,6 +47,7 @@ As of the foundation baseline, verified by execution:
 | ~~Unrestricted CORS (`allow_origins=["*"]`)~~ | **Resolved — M2/S2.1.** Explicit origin list from `CORS_ORIGINS`, enumerated methods and headers, credentials disabled |
 | No rate limiting | Open — M9 |
 | ~~No upload validation~~ | **Resolved — M3/S3.1.** Uploads are validated before anything is stored: magic-byte sniffing (the client `Content-Type` is ignored), a size cap, a page cap, and refusal of password-protected PDFs. The client filename never forms a path — storage keys are `{user_id}/{sha256}.pdf`, and the backend refuses any other shape. The owner is taken only from the authenticated principal |
+| Redis is unauthenticated in `docker-compose.yml`, and its port is published | **Open — M9.** Since M3/S3.2 Redis carries ingestion jobs. The worker trusts none of them: each job is validated, its storage key must derive from its own owner and hash, and every field must match the document PostgreSQL holds for that owner. So write access to Redis cannot reach another tenant's document or file — at worst it causes redundant verification work, or a flood of it. Authentication and an unpublished port are deployment hardening |
 | Oversized uploads are received before they are refused | **Open — M9.** FastAPI spools a multipart body to disk before the handler runs; the application refuses anything over `MAX_UPLOAD_BYTES` and never loads more than that into memory, but a transport-level body limit (proxy or middleware) does not exist yet |
 
 These are tracked work items in

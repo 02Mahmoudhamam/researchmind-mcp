@@ -95,12 +95,29 @@ with the milestones that introduce them (below).
 
 Tests set `STORAGE_ROOT` to a per-run temporary directory in `tests/conftest.py`.
 
+### Optional — ingestion worker (M3/S3.2)
+
+| Variable | Default | Notes |
+|---|---|---|
+| `ARQ_MAX_JOBS` | `10` | Jobs one worker process runs concurrently. Must be positive |
+| `INGEST_JOB_TIMEOUT_SECONDS` | `300` | ARQ cancels a job that runs longer. Must be positive |
+| `INGEST_MAX_TRIES` | `5` | Attempts for a transient failure, the first included; the last records `failed`. Must be positive |
+| `INGEST_STALE_PROCESSING_SECONDS` | `900` | The reaper fails a document `processing` for longer. **Must be greater than `INGEST_JOB_TIMEOUT_SECONDS`** — `Settings` refuses to start otherwise, because a threshold at or below the timeout could fail a job that is still running |
+
+The API and the worker read the same variables — including `STORAGE_ROOT`,
+`DATABASE_URL` and `REDIS_*`, which must agree between them. Under
+`docker compose` both services set `REDIS_HOST=redis`. See
+[ingestion.md](ingestion.md).
+
 ### Optional — services
 
 | Variable | Default |
 |---|---|
 | `QDRANT_HOST` / `QDRANT_PORT` / `QDRANT_COLLECTION` | `localhost` / `6333` / `researchmind` |
 | `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` / `REDIS_TTL` | `localhost` / `6379` / `0` / `86400` |
+
+Redis carries the ingestion queue since M3/S3.2. Tests use `REDIS_DB=15`
+(`tests/conftest.py`) and flush it, so a developer's database 0 is never touched.
 
 ### Optional — PostgreSQL *(added in M1/S1.1)*
 
@@ -171,7 +188,6 @@ Documented so the configuration surface is predictable. **Not yet present in
 | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_BATCH_SIZE` | M4 | Embedding provider | [0004](../adr/0004-local-fastembed-embeddings.md) |
 | `RETRIEVAL_TOP_K`, `RETRIEVAL_SCORE_THRESHOLD` | M4 | Retrieval tuning | [0005](../adr/0005-provider-derived-embedding-dimension.md) |
 | `CLAUDE_MODEL`, `LLM_TIMEOUT_SECONDS`, `LLM_MAX_RETRIES` | M5 | Generation | [0006](../adr/0006-single-research-agent.md) |
-| `ARQ_MAX_JOBS`, `INGEST_JOB_TIMEOUT_SECONDS` | M3 | Job queue | [0009](../adr/0009-arq-for-asynchronous-ingestion.md) |
 | `RATE_LIMIT_*` | M9 | Rate limiting | — |
 
 > `MCP_SERVER_HOST` and `MCP_SERVER_PORT` **were removed in Sprint M0/S0.2**.

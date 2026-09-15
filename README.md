@@ -153,14 +153,14 @@ Embeddings run **locally**, so a full stack needs exactly one secret:
 
 | Area | State |
 |---|---|
-| **REST endpoints** | ⚠️ Auth, `/health`, and document **upload / list / get / delete** work — an upload is validated, stored and recorded, but stays `pending` until the ingestion worker (M3/S3.2). Search, agents and workspace are authorised but answer **501** — they wait on M3–M5 |
+| **REST endpoints** | ⚠️ Auth, `/health`, and document **upload / list / get / delete** work — an upload is validated, stored, recorded and checked by an ARQ ingestion worker (ownership and SHA-256 integrity; a bad file is marked `failed`), but nothing parses it yet, so a sound upload stays `pending`. Search, agents and workspace are authorised but answer **501** — they wait on M3–M5 |
 | **Authentication & authorisation** | ✅ **M2 complete.** Register and log in over HTTP; a forged, expired or unresolvable token is **401** on every protected route; a role without the permission is **403**; another user's document is **404** whatever your role |
 | **MCP layer** | ⚠️ Imports correctly and lists its 7 tools; no tool handler is implemented yet (M6) |
 | **RAG pipeline** | ❌ 1 of 17 stages implemented |
-| **Persistence** | ⚠️ Schema (migrations `0001`–`0003`), ownership-scoped repositories and `DocumentService`. Uploaded PDFs are stored content-addressed on a local volume (ADR-0008) and recorded as `pending`; parsing and chunking are later M3 sprints |
+| **Persistence** | ⚠️ Schema (migrations `0001`–`0004`), ownership-scoped repositories and `DocumentService`. Uploaded PDFs are stored content-addressed on a local volume (ADR-0008) and recorded as `pending`; parsing and chunking are later M3 sprints |
 | **Agents** | ❌ Return `success=True` without calling an LLM |
 | **Container builds** | ⚠️ Two images, not three — the MCP container was removed in M0/S0.2 (ADR-0002 settled on stdio). Both were made to build in M0/S0.4–S0.5; not re-verified since |
-| **Test suite** | ✅ 448 passed, 2 xfailed, against real PostgreSQL in CI |
+| **Test suite** | ✅ 822 passed, 2 xfailed, against real PostgreSQL and Redis in CI |
 
 Roughly **10% complete** by the pre-M0 audit's count. That figure has not been
 re-measured since, and is left as the audit stated it rather than revised by
@@ -229,10 +229,10 @@ functional. Commands are not documented here before they work.
 ## Testing
 
 ```bash
-poetry run pytest                       # ✅ 749 passed, 2 xfailed
+poetry run pytest                       # ✅ 822 passed, 2 xfailed (needs postgres + redis; see testing.md)
 poetry run ruff check .                 # ✅ enforced in CI
 poetry run black --check .              # ✅ enforced in CI
-poetry run mypy .                       # ⚠️ 121 errors repo-wide; strict-clean and CI-enforced over the M2 security surface
+poetry run mypy .                       # ⚠️ 119 errors repo-wide; strict-clean and CI-enforced over the M2 and M3 surfaces
 ./scripts/check-hygiene.sh              # ✅ enforced in CI
 ```
 
@@ -261,7 +261,7 @@ Full detail: [docs/development/workflow.md](docs/development/workflow.md).
 | **M0** | Build integrity — images build, imports resolve, CI green |
 | **M1** | System of record — Postgres, repositories, migrations |
 | **M2** | Fail-closed authentication and authorisation *(complete — S2.1–S2.5)* |
-| **M3** | Document ingestion — PDF to owned, section-aware chunks *(S3.1 upload & storage done)* |
+| **M3** | Document ingestion — PDF to owned, section-aware chunks *(S3.1 upload & storage, S3.2 ingestion worker done)* |
 | **M4** | Tenant-isolated retrieval |
 | **M5** | **Grounded answering — first working end-to-end flow** |
 | **M6** | MCP adapter |
