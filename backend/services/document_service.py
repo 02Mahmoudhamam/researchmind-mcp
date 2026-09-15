@@ -63,6 +63,18 @@ class UploadNotConfigured(RuntimeError):
     """
 
 
+class IngestionUnavailable(Exception):
+    """The document was recorded, but no ingestion job could be queued for it.
+
+    Raised after the upload has been undone: the new document soft-deleted and
+    committed, and the stored file removed if this upload created it. Leaving
+    the document `pending` with no job behind it would strand it — nothing would
+    ever move it, and a retried upload would only return it again (ADR-0010).
+    Undoing it means the client's retry starts from nothing and succeeds once
+    the queue is back.
+    """
+
+
 class UploadPersistenceFailed(Exception):
     """The database could not record an upload. No document exists for it.
 
@@ -124,7 +136,9 @@ class DocumentService:
            this call created it*, because an identical file already on disk
            belongs to another row of this owner's.
         5. **Enqueue** an `IngestionJob` — after the commit, so a worker can
-           never receive a job for a document that does not exist.
+           never receive a job for a document that does not exist. If the queue
+           refuses it, the upload is undone (M3/S3.2): a document with no job
+           would stay `pending` forever.
 
         Filesystem and database cannot share a transaction, and this does not
         pretend otherwise. Step 4's compensation covers the ordinary failures;
@@ -139,6 +153,8 @@ class DocumentService:
         :raises StorageError: the bytes could not be stored; nothing recorded.
         :raises UploadPersistenceFailed: the row could not be recorded; nothing
             left behind that this call created.
+        :raises IngestionUnavailable: recorded, but could not be queued; the
+            upload has been undone.
         :raises UploadNotConfigured: built without storage or a queue.
         """
         if self._storage is None or self._ingestion is None:
@@ -230,16 +246,57 @@ class DocumentService:
             created_blob=created_blob,
         )
 
-        await ingestion.enqueue(
-            IngestionJob(
-                document_id=document.id,
-                owner_id=owner_id,
-                storage_key=key,
-                content_hash=validated.content_hash,
-                mime_type=validated.mime_type,
+        try:
+            await ingestion.enqueue(
+                IngestionJob(
+                    document_id=document.id,
+                    owner_id=owner_id,
+                    storage_key=key,
+                    content_hash=validated.content_hash,
+                    mime_type=validated.mime_type,
+                )
             )
-        )
+        except Exception as exc:
+            await self._undo_unqueued_upload(
+                document.id, owner_id, storage, key, created_blob
+            )
+            raise IngestionUnavailable("no ingestion job could be queued") from exc
         return UploadOutcome(document=document, created=True)
+
+    async def _undo_unqueued_upload(
+        self,
+        document_id: str,
+        owner_id: str,
+        storage: Storage,
+        key: str,
+        created_blob: bool,
+    ) -> None:
+        """Take back a committed upload whose ingestion job could not be queued.
+
+        Soft delete rather than a hard delete: repositories offer no other kind
+        (ADR-0003), and a soft-deleted row neither counts for ADR-0010's
+        duplicate rule nor appears to its owner. If the enqueue in fact reached
+        Redis before failing, the worker finds the document deleted and rejects
+        the job — so this is safe whichever way the failure really went.
+
+        Best effort, like `_discard`: if undoing fails as well, it is logged,
+        and the error the caller sees is still the queue's.
+        """
+        _log.error(
+            "document.upload.enqueue_failed", document_id=document_id, owner_id=owner_id
+        )
+        try:
+            await self._documents.soft_delete_for_user(document_id, owner_id)
+            await self._session.commit()
+        except Exception:
+            await self._session.rollback()
+            _log.error(
+                "document.upload.unqueued_document_left",
+                document_id=document_id,
+                owner_id=owner_id,
+            )
+            return
+        await self._discard(storage, key, created_blob, owner_id)
 
     @staticmethod
     async def _discard(

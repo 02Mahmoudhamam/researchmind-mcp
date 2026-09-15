@@ -38,6 +38,7 @@ from backend.security.api_security import require_permission
 from backend.security.rbac import Permission
 from backend.services.document_service import (
     DocumentService,
+    IngestionUnavailable,
     UploadPersistenceFailed,
 )
 from document_processing.validation import RejectionReason, UploadRejected
@@ -86,7 +87,9 @@ _REJECTION_STATUS = {
         422: {
             "description": "Empty, unreadable, password-protected, too many pages, or no usable filename."
         },
-        503: {"description": "Document storage is unavailable; nothing was recorded."},
+        503: {
+            "description": "Storage or the ingestion queue is unavailable; nothing was kept."
+        },
     },
 )
 async def upload_document(
@@ -123,6 +126,11 @@ async def upload_document(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Document storage is unavailable. Nothing was saved.",
+        ) from exc
+    except IngestionUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document processing is unavailable. The upload was not kept.",
         ) from exc
     except UploadPersistenceFailed as exc:
         raise HTTPException(
