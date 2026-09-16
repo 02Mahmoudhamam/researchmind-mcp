@@ -9,6 +9,8 @@ from pydantic import ValidationError
 from backend.config.settings import Settings
 from backend.ingestion import worker as worker_module
 from backend.ingestion.worker import RETRY_DELAYS_SECONDS, retry_delay_seconds
+from document_processing.embedder import SPECIAL_TOKENS_PER_SEQUENCE
+from tests.doubles import StubEmbeddingProvider
 
 
 def _settings(**overrides: Any) -> Settings:
@@ -144,36 +146,35 @@ class TestChunksMustFitWhatTheModelReads:
     start.
     """
 
-    class _Provider:
-        model_id = "test-model"
-        dimension = 8
-        max_input_tokens = 512
-        tokenizer = None
+    @staticmethod
+    def _provider() -> StubEmbeddingProvider:
+        """bge-small's limit, on a double that satisfies the real protocol."""
+        return StubEmbeddingProvider(model_id="test-model", max_input_tokens=512)
 
     def test_a_chunk_that_fits_is_allowed(self) -> None:
-        worker_module.refuse_chunks_the_model_cannot_read(510, self._Provider())
+        worker_module.refuse_chunks_the_model_cannot_read(510, self._provider())
 
     def test_a_chunk_that_exactly_fills_the_budget_is_allowed(self) -> None:
         """510 + 2 special tokens == 512. The boundary is inclusive."""
         worker_module.refuse_chunks_the_model_cannot_read(
-            512 - worker_module.SPECIAL_TOKENS_PER_SEQUENCE, self._Provider()
+            512 - SPECIAL_TOKENS_PER_SEQUENCE, self._provider()
         )
 
     def test_one_token_over_the_budget_is_refused(self) -> None:
         """511 + 2 > 512: the special tokens are part of what must fit."""
         with pytest.raises(RuntimeError) as raised:
-            worker_module.refuse_chunks_the_model_cannot_read(511, self._Provider())
+            worker_module.refuse_chunks_the_model_cannot_read(511, self._provider())
         assert "truncated" in str(raised.value)
         assert "512" in str(raised.value) and "test-model" in str(raised.value)
 
     def test_a_much_larger_chunk_size_is_refused(self) -> None:
         with pytest.raises(RuntimeError):
-            worker_module.refuse_chunks_the_model_cannot_read(4096, self._Provider())
+            worker_module.refuse_chunks_the_model_cannot_read(4096, self._provider())
 
     def test_the_shipped_configuration_fits(self) -> None:
         """CHUNK_SIZE_TOKENS=400 against bge-small's 512, with room to spare."""
         from backend.config.settings import get_settings
 
         worker_module.refuse_chunks_the_model_cannot_read(
-            get_settings().CHUNK_SIZE_TOKENS, self._Provider()
+            get_settings().CHUNK_SIZE_TOKENS, self._provider()
         )
