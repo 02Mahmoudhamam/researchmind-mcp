@@ -3,7 +3,8 @@
 S3.2 left a gap: a document could end `pending` with no job anywhere — an ARQ job
 timeout releases the claim and is not retried; a Redis outage can fall between
 an upload's commit and its enqueue — and nothing would ever look at it again.
-The recovery sweep closes it. These tests run it against a real PostgreSQL, a
+The recovery sweep closes it, and since M3/S3.4 covers `parsed` documents too:
+a job that dies between parsing and chunking strands one just as completely. These tests run it against a real PostgreSQL, a
 real Redis and, where a job has to be genuinely active, a real ARQ worker.
 
 Marked `db` and `redis`: skipped locally without them, required in CI.
@@ -359,6 +360,122 @@ class TestWhatIsNotRecovered:
         assert result == RecoveryResult(requeued=(), skipped=1)
         assert await _queued() == {}
         assert await _status(job.document_id) == ("pending", None)
+
+
+class TestParsedDocumentsAreRecoveredToo:
+    """M3/S3.4: `parsed` is the second status a delivery starts a stage from."""
+
+    async def _parse_only(self, root: Path, job: IngestionJob) -> None:
+        """Leave the document `parsed` with no job, as a died-mid-pipeline one is."""
+
+        class Failing:
+            def chunk(self, pages: Any) -> Any:
+                raise RuntimeError("stop after parsing")
+
+        async with get_sessionmaker()() as session:
+            service = IngestionService(
+                session,
+                LocalStorage(root),
+                extractor=PyMuPDFTextExtractor(timeout_seconds=60, max_concurrency=4),
+                chunker=Failing(),
+                max_pages=get_settings().MAX_PDF_PAGES,
+            )
+            with pytest.raises(Exception):
+                await service.ingest(job, final_attempt=False)
+
+    async def test_a_parsed_document_without_a_job_is_requeued(
+        self, committing_session: Any, storage_root: Path
+    ) -> None:
+        job = await _uploaded(committing_session, storage_root)
+        await self._parse_only(storage_root, job)
+        assert (await _status(job.document_id))[0] == "parsed"
+
+        result = await _sweep(storage_root)
+
+        assert result.requeued == (job.document_id,)
+        assert list(await _queued()) == [ingestion_job_id(job.document_id)]
+
+    async def test_the_recovered_job_is_built_from_the_row_as_ever(
+        self, committing_session: Any, storage_root: Path
+    ) -> None:
+        job = await _uploaded(committing_session, storage_root)
+        await self._parse_only(storage_root, job)
+
+        await _sweep(storage_root)
+
+        payload = (await _queued())[ingestion_job_id(job.document_id)]
+        assert payload == job.model_dump(mode="json")
+
+    async def test_a_chunked_document_is_left_alone(
+        self, committing_session: Any, storage_root: Path
+    ) -> None:
+        job = await _uploaded(committing_session, storage_root)
+        await _sql(
+            committing_session,
+            "UPDATE documents SET status = 'chunked' WHERE id = :id",
+            id=uuid.UUID(job.document_id),
+        )
+
+        result = await _sweep(storage_root)
+
+        assert result.requeued == ()
+        assert await _queued() == {}
+
+    async def test_a_parsed_document_with_a_job_gets_no_second(
+        self, committing_session: Any, storage_root: Path
+    ) -> None:
+        job = await _uploaded(committing_session, storage_root)
+        await self._parse_only(storage_root, job)
+        await ArqIngestionQueue(redis_settings_from(get_settings())).enqueue(job)
+
+        result = await _sweep(storage_root)
+
+        assert result == RecoveryResult(requeued=(), already_queued=1)
+        assert len(await _queued()) == 1
+
+    async def test_a_deleted_parsed_document_is_ignored(
+        self, committing_session: Any, storage_root: Path
+    ) -> None:
+        job = await _uploaded(committing_session, storage_root)
+        await self._parse_only(storage_root, job)
+        await DocumentRepository(committing_session).soft_delete_for_user(
+            job.document_id, job.owner_id
+        )
+        await committing_session.commit()
+
+        result = await _sweep(storage_root)
+
+        assert result.requeued == ()
+        assert await _queued() == {}
+
+    async def test_concurrent_sweeps_queue_one_job_for_a_parsed_document(
+        self, committing_session: Any, storage_root: Path
+    ) -> None:
+        job = await _uploaded(committing_session, storage_root)
+        await self._parse_only(storage_root, job)
+
+        results = await asyncio.gather(*[_sweep(storage_root) for _ in range(4)])
+
+        assert sum(len(result.requeued) for result in results) == 1
+        assert sum(result.already_queued for result in results) == 3
+        assert list(await _queued()) == [ingestion_job_id(job.document_id)]
+
+    async def test_a_recovered_parsed_document_is_chunked_by_a_real_worker(
+        self,
+        committing_session: Any,
+        storage_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(worker_module, "RETRY_DELAYS_SECONDS", (0,))
+        job = await _uploaded(committing_session, storage_root)
+        await self._parse_only(storage_root, job)
+        worker = _worker(with_recovery=True)
+        try:
+            await worker.main()
+        finally:
+            await worker.close()
+
+        assert await _status(job.document_id) == ("chunked", None)
 
 
 class TestConcurrentSweeps:

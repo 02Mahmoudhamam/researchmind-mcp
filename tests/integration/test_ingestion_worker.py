@@ -416,6 +416,67 @@ class TestTheWorkerTask:
         assert await _status(job.document_id) == ("processing", None)
 
 
+class TestTheChunkStage:
+    """M3/S3.4 through a real ARQ worker: parse and chunk in one delivery."""
+
+    async def test_an_upload_is_parsed_and_chunked_by_one_job(
+        self, committing_session: Any, storage_root: Path
+    ) -> None:
+        from tests.pdfs import make_paper_pdf
+
+        job = await _uploaded_job(committing_session, storage_root, make_paper_pdf())
+        await ArqIngestionQueue(redis_settings_from(get_settings())).enqueue(job)
+
+        worker = await _run_worker()
+
+        assert (worker.jobs_complete, worker.jobs_failed) == (1, 0)
+        assert await _status(job.document_id) == ("chunked", None)
+        async with get_sessionmaker()() as session:
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT count(*), max(page_end) FROM document_chunks"
+                        " WHERE document_id = :id"
+                    ),
+                    {"id": uuid.UUID(job.document_id)},
+                )
+            ).one()
+        assert rows[0] > 1, "a paper is more than one chunk"
+        assert rows[1] >= 2, "provenance survives the worker"
+
+    async def test_a_second_delivery_changes_nothing(
+        self, committing_session: Any, storage_root: Path
+    ) -> None:
+        job = await _uploaded_job(committing_session, storage_root)
+        await ArqIngestionQueue(redis_settings_from(get_settings())).enqueue(job)
+        await _run_worker()
+        async with get_sessionmaker()() as session:
+            before = (
+                await session.execute(
+                    text(
+                        "SELECT count(*) FROM document_chunks WHERE document_id = :id"
+                    ),
+                    {"id": uuid.UUID(job.document_id)},
+                )
+            ).scalar_one()
+
+        await ArqIngestionQueue(redis_settings_from(get_settings())).enqueue(job)
+        worker = await _run_worker()
+
+        assert worker.jobs_failed == 0
+        assert await _status(job.document_id) == ("chunked", None)
+        async with get_sessionmaker()() as session:
+            after = (
+                await session.execute(
+                    text(
+                        "SELECT count(*) FROM document_chunks WHERE document_id = :id"
+                    ),
+                    {"id": uuid.UUID(job.document_id)},
+                )
+            ).scalar_one()
+        assert after == before
+
+
 class TestTheWorkerEntrypoint:
     def test_worker_settings_are_wired_as_adr_0009_requires(self) -> None:
         from backend.ingestion.worker_settings import WorkerSettings

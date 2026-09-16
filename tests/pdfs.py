@@ -134,3 +134,35 @@ def make_image_only_pdf(pages: int = 1) -> bytes:
     data: bytes = document.tobytes()
     document.close()
     return data
+
+
+def make_paper_pdf() -> bytes:
+    """Two pages shaped like a paper: headings, prose across a page break, refs.
+
+    What the chunker is for — sections to stay inside, a page boundary to
+    record, and a reference list to split on entry boundaries.
+    """
+    document = _pdf.open()
+    rect = _pdf.Rect
+    first = document.new_page()
+    first.insert_textbox(
+        rect(72, 60, 523, 100), "A Study of Several Things", fontsize=18
+    )
+    first.insert_textbox(rect(72, 110, 523, 140), "Abstract", fontsize=13)
+    first.insert_textbox(rect(72, 145, 523, 250), _PARAGRAPH, fontsize=10)
+    first.insert_textbox(rect(72, 260, 523, 290), "1 Introduction", fontsize=13)
+    first.insert_textbox(rect(72, 295, 523, 760), _PARAGRAPH * 3, fontsize=10)
+    second = document.new_page()
+    second.insert_textbox(rect(72, 60, 523, 300), _PARAGRAPH * 2, fontsize=10)
+    second.insert_textbox(rect(72, 320, 523, 350), "2 Method", fontsize=13)
+    second.insert_textbox(rect(72, 355, 523, 560), _PARAGRAPH * 2, fontsize=10)
+    second.insert_textbox(rect(72, 580, 523, 610), "References", fontsize=13)
+    entries = "\n".join(
+        f"[{i}] A. Author and B. Author, A paper about things number {i}, "
+        f"Journal of Things, 20{i:02d}."
+        for i in range(1, 6)
+    )
+    second.insert_textbox(rect(72, 615, 523, 770), entries, fontsize=9)
+    data: bytes = document.tobytes()
+    document.close()
+    return data
