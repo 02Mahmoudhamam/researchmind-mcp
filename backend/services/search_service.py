@@ -1,6 +1,6 @@
 """Semantic search service."""
 
-from document_processing.embedder import EmbeddingGenerator
+from shared.interfaces.embedding import EmbeddingProvider
 from vector_db.qdrant.repository import QdrantVectorRepository
 from shared.models.document import SearchResult
 from typing import List, Optional
@@ -8,7 +8,10 @@ from typing import List, Optional
 
 class SearchService:
     def __init__(self):
-        self._embedder = EmbeddingGenerator()
+        # TODO(M4): the query must be embedded by the same provider that
+        # embedded the documents (ADR-0005 §5), injected rather than built
+        # here — searching with a second model compares two vector spaces.
+        self._embedder: EmbeddingProvider | None = None
         self._vector_store = QdrantVectorRepository()
 
     async def search(

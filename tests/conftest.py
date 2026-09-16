@@ -139,6 +139,38 @@ def _redis_is_reachable() -> bool:
         return False
 
 
+_EMBEDDING_PROVIDER: object | None = None
+
+
+def _embedding_model_is_available() -> bool:
+    """Load the embedding model once per run, and keep it for the tests.
+
+    The parallel to `_database_is_reachable` is exact: this is the real thing,
+    not a stand-in. A cold cache downloads ~67 MB, which is why CI pre-fetches
+    it and the image bakes it in; without it, the tests that need it skip.
+    """
+    global _EMBEDDING_PROVIDER
+    if _EMBEDDING_PROVIDER is not None:
+        return True
+    try:
+        from document_processing.embedder import FastEmbedProvider
+
+        _EMBEDDING_PROVIDER = FastEmbedProvider(
+            os.environ.get("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5"),
+            cache_dir=os.environ.get("EMBEDDING_CACHE_DIR") or None,
+        )
+        return True
+    except Exception:
+        return False
+
+
+@pytest.fixture(scope="session")
+def embedding_provider() -> Any:
+    """The one loaded model, shared by every test that needs it."""
+    assert _EMBEDDING_PROVIDER is not None, "the collection gate should have loaded it"
+    return _EMBEDDING_PROVIDER
+
+
 def _require_or_skip(
     items: list[pytest.Item],
     *,
@@ -170,7 +202,7 @@ def _require_or_skip(
 
 
 def pytest_collection_modifyitems(config: object, items: list[pytest.Item]) -> None:
-    """Gate `db` tests on PostgreSQL and `redis` tests on Redis."""
+    """Gate `db` on PostgreSQL, `redis` on Redis, `embeddings` on the model."""
     db_items = [item for item in items if item.get_closest_marker("db")]
     if db_items:
         dsn_host = os.environ["DATABASE_URL"].rsplit("@", 1)[-1]
@@ -190,6 +222,16 @@ def pytest_collection_modifyitems(config: object, items: list[pytest.Item]) -> N
             required_by="REQUIRE_REDIS",
             what="Redis",
             how_to_start="docker compose up -d redis",
+        )
+
+    model_items = [item for item in items if item.get_closest_marker("embeddings")]
+    if model_items:
+        _require_or_skip(
+            model_items,
+            reachable=_embedding_model_is_available(),
+            required_by="REQUIRE_EMBEDDINGS",
+            what="the embedding model",
+            how_to_start="poetry run python scripts/fetch-embedding-model.py",
         )
 
 
