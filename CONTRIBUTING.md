@@ -19,6 +19,7 @@ Read first:
 - [docs/development/uploads.md](docs/development/uploads.md) — upload validation, content-addressed storage, duplicates, and the ingestion hand-off
 - [docs/development/ingestion.md](docs/development/ingestion.md) — the ARQ worker: status lifecycle, failure reasons, retries, idempotency, the stale-claim reaper and the recovery sweep
 - [docs/development/pdf-extraction.md](docs/development/pdf-extraction.md) — PDF text extraction: stored format, reading order, cleaning, failures and the time budget
+- [docs/development/chunking.md](docs/development/chunking.md) — section detection and section-aware chunking: the tokenizer seam, references, provenance and the `chunked` status
 - [docs/adr/](docs/adr/) — why the system is shaped this way
 - [docs/security/principles.md](docs/security/principles.md) — non-negotiable invariants
 

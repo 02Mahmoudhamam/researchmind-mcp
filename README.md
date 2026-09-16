@@ -153,11 +153,11 @@ Embeddings run **locally**, so a full stack needs exactly one secret:
 
 | Area | State |
 |---|---|
-| **REST endpoints** | ⚠️ Auth, `/health`, and document **upload / list / get / delete** work — an upload is validated, stored, recorded, checked by an ARQ ingestion worker (ownership and SHA-256 integrity) and has its text extracted, becoming `parsed`; a bad or unreadable file is marked `failed`. Nothing chunks or searches it yet. Search, agents and workspace are authorised but answer **501** — they wait on M3–M5 |
+| **REST endpoints** | ⚠️ Auth, `/health`, and document **upload / list / get / delete** work — an upload is validated, stored, recorded, checked by an ARQ ingestion worker (ownership and SHA-256 integrity), extracted and chunked, becoming `chunked`; a bad or unreadable file is marked `failed`. Nothing embeds or searches it yet. Search, agents and workspace are authorised but answer **501** — they wait on M3–M5 |
 | **Authentication & authorisation** | ✅ **M2 complete.** Register and log in over HTTP; a forged, expired or unresolvable token is **401** on every protected route; a role without the permission is **403**; another user's document is **404** whatever your role |
 | **MCP layer** | ⚠️ Imports correctly and lists its 7 tools; no tool handler is implemented yet (M6) |
-| **RAG pipeline** | ⚠️ PDF text extraction works (M3/S3.3); section detection, chunking, embedding, retrieval and generation are still stubs |
-| **Persistence** | ⚠️ Schema (migrations `0001`–`0005`), ownership-scoped repositories and `DocumentService`. Uploaded PDFs are stored content-addressed on a local volume (ADR-0008); their extracted text is stored per page. Chunking is a later M3 sprint |
+| **RAG pipeline** | ⚠️ PDF text extraction (M3/S3.3) and section-aware chunking (M3/S3.4) work; embedding, retrieval and generation are still stubs |
+| **Persistence** | ⚠️ Schema (migrations `0001`–`0006`), ownership-scoped repositories and `DocumentService`. Uploaded PDFs are stored content-addressed on a local volume (ADR-0008); their text is stored per page and their section-aware chunks per chunk, with the provenance a citation needs |
 | **Agents** | ❌ Return `success=True` without calling an LLM |
 | **Container builds** | ⚠️ Two images, not three — the MCP container was removed in M0/S0.2 (ADR-0002 settled on stdio). Both were made to build in M0/S0.4–S0.5; not re-verified since |
 | **Test suite** | ✅ 941 passed, 2 xfailed, against real PostgreSQL and Redis in CI |
@@ -232,7 +232,7 @@ functional. Commands are not documented here before they work.
 poetry run pytest                       # ✅ 941 passed, 2 xfailed (needs postgres + redis; see testing.md)
 poetry run ruff check .                 # ✅ enforced in CI
 poetry run black --check .              # ✅ enforced in CI
-poetry run mypy .                       # ⚠️ 116 errors repo-wide; strict-clean and CI-enforced over the M2 and M3 surfaces
+poetry run mypy .                       # ⚠️ 113 errors repo-wide; strict-clean and CI-enforced over the M2 and M3 surfaces
 ./scripts/check-hygiene.sh              # ✅ enforced in CI
 ```
 
@@ -261,7 +261,7 @@ Full detail: [docs/development/workflow.md](docs/development/workflow.md).
 | **M0** | Build integrity — images build, imports resolve, CI green |
 | **M1** | System of record — Postgres, repositories, migrations |
 | **M2** | Fail-closed authentication and authorisation *(complete — S2.1–S2.5)* |
-| **M3** | Document ingestion — PDF to owned, section-aware chunks *(S3.1 upload & storage, S3.2 ingestion worker, S3.3 PDF text extraction done)* |
+| **M3** | Document ingestion — PDF to owned, section-aware chunks *(S3.1 upload & storage, S3.2 ingestion worker, S3.3 PDF text extraction, S3.4 section-aware chunking done)* |
 | **M4** | Tenant-isolated retrieval |
 | **M5** | **Grounded answering — first working end-to-end flow** |
 | **M6** | MCP adapter |

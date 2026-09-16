@@ -108,6 +108,15 @@ Tests set `STORAGE_ROOT` to a per-run temporary directory in `tests/conftest.py`
 The page cap the worker enforces is `MAX_PDF_PAGES`, the same setting upload
 uses — not a second one.
 
+### Optional — chunking (M3/S3.4)
+
+| Variable | Default | Notes |
+|---|---|---|
+| `CHUNK_SIZE_TOKENS` | `400` | Tokens per chunk — ADR-005's "~400 tokens". Counted by the chunker's tokenizer (currently the provisional `regex-word/v1`), **not** an embedding model's |
+| `CHUNK_OVERLAP_TOKENS` | `60` | Tokens shared with the previous chunk — ADR-005's "~15% overlap". Must be ≥ 0 and **less than `CHUNK_SIZE_TOKENS`**, or the windows would not advance |
+
+See [chunking.md](chunking.md). Reference chunks ignore the overlap by design.
+
 The API and the worker read the same variables — including `STORAGE_ROOT`,
 `DATABASE_URL` and `REDIS_*`, which must agree between them. Under
 `docker compose` both services set `REDIS_HOST=redis`. See
@@ -188,7 +197,6 @@ Documented so the configuration surface is predictable. **Not yet present in
 
 | Variable | Milestone | Purpose | ADR |
 |---|---|---|---|
-| `CHUNK_SIZE_TOKENS`, `CHUNK_OVERLAP_TOKENS` | M3 | Chunking, in tokens | [0007](../adr/0007-defer-parent-document-retrieval.md) |
 | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_BATCH_SIZE` | M4 | Embedding provider | [0004](../adr/0004-local-fastembed-embeddings.md) |
 | `RETRIEVAL_TOP_K`, `RETRIEVAL_SCORE_THRESHOLD` | M4 | Retrieval tuning | [0005](../adr/0005-provider-derived-embedding-dimension.md) |
 | `CLAUDE_MODEL`, `LLM_TIMEOUT_SECONDS`, `LLM_MAX_RETRIES` | M5 | Generation | [0006](../adr/0006-single-research-agent.md) |

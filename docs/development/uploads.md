@@ -128,8 +128,9 @@ filename. The worker must use `owner_id` as given and never look an owner up.
 **Since M3/S3.2 the queue is `ArqIngestionQueue`** (job id
 `ingest-document:{document_id}`), and a worker consumes it: it verifies the
 job against the database and the bytes against the hash, and records `failed`
-with a reason when they are wrong. **Since M3/S3.3** it then extracts the text
-and the document becomes `parsed` — not yet searchable. A document whose job
+with a reason when they are wrong. **Since M3/S3.3** it then extracts the text,
+and **since M3/S3.4** splits it into section-aware chunks: the document becomes
+`chunked` — still not searchable, because nothing has embedded it. A document whose job
 never reached Redis is picked up by the worker's recovery sweep. The worker is
 [ingestion.md](ingestion.md); extraction is [pdf-extraction.md](pdf-extraction.md).
 S3.1's `DeferredIngestionQueue`, which logged and did nothing, is gone.
