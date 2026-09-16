@@ -292,7 +292,9 @@ class TestAParsedDocumentIsChunked:
 
         assert len(mine) > 1 and theirs == []
         assert mine[0].section is not None
-        assert mine[0].page_start >= 1
+        # The read model carries ADR-0007's provenance, so a citation resolves.
+        assert mine[0].page_start is not None and mine[0].page_start >= 1
+        assert mine[0].page_end is not None and mine[0].page_end >= mine[0].page_start
 
     async def test_a_soft_deleted_document_hides_its_chunks(
         self, committing_session: Any, root: Path
