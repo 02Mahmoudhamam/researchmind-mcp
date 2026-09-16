@@ -93,6 +93,20 @@ class IngestionReason(str, Enum):
     # The chunker itself failed.
     CHUNKING_FAILURE = "chunking_failure"
 
+    # Embedding and the vector store (M3/S3.5).
+    # A `chunked` document whose chunks are gone, or whose pages are gone when
+    # a version change means they must be chunked again.
+    NO_CHUNKS_TO_EMBED = "no_chunks_to_embed"
+    # The embedding provider failed. Transient: the model is local, so this is
+    # usually resource exhaustion rather than a fact about the document.
+    EMBEDDING_FAILURE = "embedding_failure"
+    # The vector store refused, or could not be reached. Transient.
+    VECTOR_STORE_FAILURE = "vector_store_failure"
+    # A vector whose width is not the collection's. Permanent: retrying the
+    # same model against the same collection produces the same mismatch, and
+    # one of the two is misconfigured.
+    EMBEDDING_DIMENSION_MISMATCH = "embedding_dimension_mismatch"
+
     # Documents that were `error` before migration 0004 introduced reasons.
     UNKNOWN = "unknown"
 
@@ -108,8 +122,9 @@ class IngestionOutcome(str, Enum):
     SKIPPED_IN_PROGRESS = "skipped_in_progress"
     # Chunked and stored; the document is now `chunked` (M3/S3.4).
     CHUNKED = "chunked"
-    # The document is already `chunked`: this job's work is done.
-    SKIPPED_CHUNKED = "skipped_chunked"
+    # Embedded, upserted and committed; the document is now `ready` — which
+    # means searchable, and nothing else may set it (M3/S3.5, ADR-0013 §3).
+    READY = "ready"
     # The document is already `ready` or `failed`. Nothing was done.
     SKIPPED_TERMINAL = "skipped_terminal"
     # The job was not acted on; the document was not changed.

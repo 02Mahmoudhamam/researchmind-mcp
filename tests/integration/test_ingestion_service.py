@@ -18,6 +18,7 @@ success these tests expect is `parsed`. Parsing's own cases are in
 """
 
 import asyncio
+import contextlib
 import hashlib
 import io
 import re
@@ -45,9 +46,9 @@ from backend.services.ingestion_service import (
     TransientIngestionError,
 )
 from backend.storage import LocalStorage
-from document_processing.chunker import SectionAwareChunker
+from document_processing.chunker import STRATEGY_VERSION, SectionAwareChunker
 from document_processing.pdf_parser import PyMuPDFTextExtractor
-from document_processing.tokenization import RegexTokenizer
+from document_processing.tokenization import RegexTokenizer, TOKENIZER_ID
 from shared.interfaces.storage import StorageError, document_storage_key
 from shared.models.document import DocumentStatus
 from shared.models.ingestion import (
@@ -58,6 +59,7 @@ from shared.models.ingestion import (
 from shared.models.principal import Principal
 from shared.models.user import UserRole
 from tests.pdfs import make_pdf
+from tests.doubles import InMemoryVectorStore, StubEmbeddingProvider
 
 pytestmark = [
     pytest.mark.db,
@@ -183,21 +185,29 @@ async def _upload(
     return queue.jobs[0]
 
 
-def _service(session: Any, storage: Any) -> IngestionService:
+def _service(session: Any, storage: Any, *, vectors: Any = None) -> IngestionService:
     """The service as the worker builds it, with the real extractor."""
     return IngestionService(
         session,
         storage,
         extractor=PyMuPDFTextExtractor(timeout_seconds=60, max_concurrency=8),
         chunker=SectionAwareChunker(RegexTokenizer(), chunk_size=400, chunk_overlap=60),
+        embedder=StubEmbeddingProvider(),
+        vectors=vectors if vectors is not None else InMemoryVectorStore(),
+        strategy_version=STRATEGY_VERSION,
+        tokenizer_id=TOKENIZER_ID,
         max_pages=get_settings().MAX_PDF_PAGES,
     )
 
 
-async def _ingest(storage: Any, job: IngestionJob, *, final: bool = False) -> Any:
+async def _ingest(
+    storage: Any, job: IngestionJob, *, final: bool = False, vectors: Any = None
+) -> Any:
     """One delivery, in its own session — as the worker runs it."""
     async with get_sessionmaker()() as session:
-        return await _service(session, storage).ingest(job, final_attempt=final)
+        return await _service(session, storage, vectors=vectors).ingest(
+            job, final_attempt=final
+        )
 
 
 async def _row(session: Any, document_id: str) -> dict[str, Any]:
@@ -255,11 +265,11 @@ class TestASoundDocumentIsVerified:
 
         result = await _ingest(spy, job)
 
-        assert result.outcome is IngestionOutcome.CHUNKED
+        assert result.outcome is IngestionOutcome.READY
         assert result.document_id == job.document_id
         assert result.reason is None
         row = await _row(committing_session, job.document_id)
-        assert (row["status"], row["failure_reason"]) == ("chunked", None)
+        assert (row["status"], row["failure_reason"]) == ("ready", None)
         assert spy.gets == 1
 
     async def test_the_document_is_processing_while_it_is_being_read(
@@ -278,16 +288,34 @@ class TestASoundDocumentIsVerified:
 
         assert seen == ["processing"]
 
-    async def test_it_never_sets_ready(
+    async def test_ready_is_set_only_after_the_vectors_are_written(
         self, committing_session: Any, storage: LocalStorage
     ) -> None:
+        """S3.4 asserted that nothing set `ready`. S3.5 is what sets it.
+
+        The claim that replaces it is the one ADR-0013 §3 makes: `ready` means
+        searchable, so it is committed **after** the vector store accepted the
+        upsert and never before. Here the store refuses, and the document does
+        not become `ready` however many times the job is delivered.
+        """
         owner = await _owner(committing_session)
         job = await _upload(committing_session, storage, owner)
+        vectors = InMemoryVectorStore()
+        vectors.fail_upsert = True
 
         for _ in range(3):
-            await _ingest(storage, job)
+            with contextlib.suppress(TransientIngestionError):
+                await _ingest(storage, job, vectors=vectors)
 
         assert (await _row(committing_session, job.document_id))["status"] != "ready"
+        assert vectors.points == {}
+
+        vectors.fail_upsert = False
+        assert (await _ingest(storage, job, vectors=vectors)).outcome is (
+            IngestionOutcome.READY
+        )
+        assert (await _row(committing_session, job.document_id))["status"] == "ready"
+        assert vectors.points
 
 
 # =============================================================================
@@ -592,7 +620,7 @@ class TestTransientFailures:
 
         result = await _ingest(storage, job)
 
-        assert result.outcome is IngestionOutcome.CHUNKED
+        assert result.outcome is IngestionOutcome.READY
 
 
 # =============================================================================
@@ -605,11 +633,10 @@ class TestDeliveryIsIdempotent:
         ("status", "reason", "outcome"),
         [
             ("processing", None, IngestionOutcome.SKIPPED_IN_PROGRESS),
-            ("chunked", None, IngestionOutcome.SKIPPED_CHUNKED),
             ("ready", None, IngestionOutcome.SKIPPED_TERMINAL),
             ("failed", "storage_missing", IngestionOutcome.SKIPPED_TERMINAL),
         ],
-        ids=["processing", "chunked", "ready", "failed"],
+        ids=["processing", "ready", "failed"],
     )
     async def test_a_document_not_pending_is_left_exactly_as_it_is(
         self,
@@ -636,6 +663,29 @@ class TestDeliveryIsIdempotent:
         assert await _row(committing_session, job.document_id) == before
         assert spy.gets == 0
 
+    async def test_a_chunked_document_is_embedded_rather_than_skipped(
+        self, committing_session: Any, storage: LocalStorage
+    ) -> None:
+        """Since M3/S3.5 `chunked` is a stage's starting point, not the end.
+
+        Before it, a redelivered `chunked` document was skipped and nothing
+        ever set `ready`. It is the change that completes the pipeline, so it
+        is asserted where the old behaviour was.
+        """
+        owner = await _owner(committing_session)
+        job = await _upload(committing_session, storage, owner)
+        await _ingest(storage, job)
+        # Back to where a delivery interrupted after chunking would leave it.
+        await _set(committing_session, job.document_id, status=DocumentStatus.CHUNKED)
+        spy = SpyStorage(storage)
+
+        result = await _ingest(spy, job)
+
+        assert result.outcome is IngestionOutcome.READY
+        assert (await _row(committing_session, job.document_id))["status"] == "ready"
+        # Embedding reads chunks, never the stored PDF.
+        assert spy.gets == 0
+
     async def test_the_same_job_twice_is_harmless(
         self, committing_session: Any, storage: LocalStorage
     ) -> None:
@@ -646,10 +696,10 @@ class TestDeliveryIsIdempotent:
         second = await _ingest(storage, job)
 
         assert (first.outcome, second.outcome) == (
-            IngestionOutcome.CHUNKED,
-            IngestionOutcome.SKIPPED_CHUNKED,
+            IngestionOutcome.READY,
+            IngestionOutcome.SKIPPED_TERMINAL,
         )
-        assert (await _row(committing_session, job.document_id))["status"] == "chunked"
+        assert (await _row(committing_session, job.document_id))["status"] == "ready"
 
     async def test_a_failed_document_redelivered_keeps_its_reason(
         self, committing_session: Any, storage: LocalStorage, tmp_path: Path
@@ -674,7 +724,7 @@ class TestDeliveryIsIdempotent:
 
         Reads are held open, so if two deliveries both held the claim their reads
         would overlap. They never do. Every delivery ends without an error, and
-        the document ends `parsed` — by exactly one of them.
+        the document ends `ready` — by exactly one of them.
         """
         owner = await _owner(committing_session)
         job = await _upload(committing_session, storage, owner)
@@ -684,13 +734,13 @@ class TestDeliveryIsIdempotent:
 
         assert slow.most_in_flight == 1
         outcomes = [r.outcome for r in results]
-        assert outcomes.count(IngestionOutcome.CHUNKED) == 1
+        assert outcomes.count(IngestionOutcome.READY) == 1
         assert set(outcomes) <= {
-            IngestionOutcome.CHUNKED,
+            IngestionOutcome.READY,
             IngestionOutcome.SKIPPED_IN_PROGRESS,
-            IngestionOutcome.SKIPPED_CHUNKED,
+            IngestionOutcome.SKIPPED_TERMINAL,
         }
-        assert (await _row(committing_session, job.document_id))["status"] == "chunked"
+        assert (await _row(committing_session, job.document_id))["status"] == "ready"
 
     async def test_an_interrupted_delivery_puts_the_document_back(
         self, committing_session: Any, storage: LocalStorage
@@ -718,7 +768,7 @@ class TestDeliveryIsIdempotent:
 
         row = await _row(committing_session, job.document_id)
         assert (row["status"], row["failure_reason"]) == ("pending", None)
-        assert (await _ingest(storage, job)).outcome is IngestionOutcome.CHUNKED
+        assert (await _ingest(storage, job)).outcome is IngestionOutcome.READY
 
     async def test_a_claim_taken_by_the_reaper_is_not_overwritten(
         self, committing_session: Any, storage: LocalStorage, tmp_path: Path
@@ -1059,9 +1109,9 @@ class TestTheWorkersQueriesCarryTheOwner:
             and "storage_key" in s
         ]
         writes = [s for s in statements if s.lstrip().startswith("UPDATE documents")]
-        # Two stages, two claims and two advances: pending -> processing ->
-        # parsed -> processing -> chunked (M3/S3.4).
-        assert reads and len(writes) == 4, (reads, writes)
+        # Three stages, three claims and three advances: pending -> processing
+        # -> parsed -> processing -> chunked -> processing -> ready (M3/S3.5).
+        assert reads and len(writes) == 6, (reads, writes)
         for statement in reads + writes:
             assert "documents.user_id = " in statement, statement
             assert "documents.deleted_at IS NULL" in statement, statement

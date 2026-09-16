@@ -17,7 +17,7 @@
 #
 # mypy is promoted at M2 as scheduled, but over the finished surface only — not
 # the whole repository — and the scope is the honest part. `mypy .` still
-# reports 113 errors, most of them `empty-body`: stubs in M4–M6 subsystems that
+# reports 104 errors, most of them `empty-body`: stubs in M4–M6 subsystems that
 # declare a non-Optional return and then `...`. Those are the unimplemented
 # system, not type bugs, and enforcing them would mean a permanently red
 # pipeline or blanket ignores; both teach people to ignore CI.

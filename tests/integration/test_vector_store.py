@@ -34,6 +34,28 @@ def _vector(seed: float) -> tuple[float, ...]:
     return tuple(value / length for value in raw)
 
 
+def _conditions(built: models.Filter) -> list[tuple[str, object]]:
+    """The `must` conditions as (field, value), asserting each is a field match.
+
+    Narrowing rather than indexing into a union: a `should`, a nested filter or
+    an `is_empty` in that list would be a different query from the one the
+    isolation invariant relies on, and this refuses it by name.
+    """
+    assert built.must is not None
+    pairs: list[tuple[str, object]] = []
+    for condition in built.must:
+        assert isinstance(condition, models.FieldCondition), condition
+        match = condition.match
+        assert isinstance(match, (models.MatchValue, models.MatchAny)), match
+        pairs.append(
+            (
+                condition.key,
+                match.value if isinstance(match, models.MatchValue) else match.any,
+            )
+        )
+    return pairs
+
+
 def _record(
     *,
     owner: str,
@@ -69,8 +91,10 @@ class TestTheCollection:
         """Not a literal: the scaffold's hard-coded 1536 is what this replaces."""
         await vector_store.ensure_collection(dimension=DIMENSION)
         info = await vector_store._client.get_collection(vector_store._collection)
-        assert info.config.params.vectors.size == DIMENSION
-        assert info.config.params.vectors.distance == models.Distance.COSINE
+        params = info.config.params.vectors
+        assert isinstance(params, models.VectorParams), "one unnamed vector"
+        assert params.size == DIMENSION
+        assert params.distance == models.Distance.COSINE
 
     async def test_creating_it_twice_is_harmless(
         self, vector_store: QdrantVectorStore
@@ -256,18 +280,16 @@ class TestTenantIsolation:
     ) -> None:
         """Not post-filtering: post-filtering means the rows were already read."""
         built = vector_store._owned_by(ALICE)
-        assert built.should is None
-        assert [(condition.key, condition.match.value) for condition in built.must] == [
-            ("user_id", ALICE)
-        ]
+        assert built.should is None, "the owner must not be one option among several"
+        assert _conditions(built) == [("user_id", ALICE)]
 
     async def test_document_scoping_narrows_and_never_widens(
         self, vector_store: QdrantVectorStore
     ) -> None:
         built = vector_store._owned_by(ALICE, ["one", "two"])
-        assert [condition.key for condition in built.must] == [
-            "user_id",
-            "document_id",
+        assert _conditions(built) == [
+            ("user_id", ALICE),
+            ("document_id", ["one", "two"]),
         ]
         assert built.should is None
 

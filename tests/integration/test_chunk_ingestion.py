@@ -36,15 +36,16 @@ from backend.services.ingestion_service import (
     TransientIngestionError,
 )
 from backend.storage import LocalStorage
-from document_processing.chunker import SectionAwareChunker
+from document_processing.chunker import STRATEGY_VERSION, SectionAwareChunker
 from document_processing.pdf_parser import PyMuPDFTextExtractor
-from document_processing.tokenization import RegexTokenizer
+from document_processing.tokenization import RegexTokenizer, TOKENIZER_ID
 from shared.interfaces.storage import document_storage_key
 from shared.models.chunking import Chunk, ChunkingResult
 from shared.models.extraction import ExtractedPage
 from shared.models.ingestion import IngestionJob, IngestionOutcome, IngestionReason
 from shared.models.principal import Principal
 from tests.pdfs import make_paper_pdf
+from tests.doubles import InMemoryVectorStore, StubEmbeddingProvider
 
 pytestmark = [
     pytest.mark.db,
@@ -141,6 +142,10 @@ def _service(session: Any, root: Path, *, chunker: Any = None) -> IngestionServi
         extractor=PyMuPDFTextExtractor(timeout_seconds=60, max_concurrency=8),
         chunker=chunker
         or SectionAwareChunker(RegexTokenizer(), chunk_size=120, chunk_overlap=20),
+        embedder=StubEmbeddingProvider(),
+        vectors=InMemoryVectorStore(),
+        strategy_version=STRATEGY_VERSION,
+        tokenizer_id=TOKENIZER_ID,
         max_pages=get_settings().MAX_PDF_PAGES,
     )
 
@@ -229,10 +234,10 @@ class TestAParsedDocumentIsChunked:
 
         result = await _ingest(root, job)
 
-        assert result.outcome is IngestionOutcome.CHUNKED
+        assert result.outcome is IngestionOutcome.READY
         status, reason, chunk_count = await _row(job.document_id)
         rows = await _chunk_rows(job.document_id)
-        assert (status, reason) == ("chunked", None)
+        assert (status, reason) == ("ready", None)
         assert chunk_count == len(rows) > 1
 
     async def test_every_chunk_carries_its_provenance(
@@ -328,7 +333,7 @@ class TestAParsedDocumentIsChunked:
         )
 
         assert response.status_code == 200
-        assert response.json()["status"] == "chunked"
+        assert response.json()["status"] == "ready"
         assert "chunk" not in response.json()
         assert "Introduction" not in response.text
 
@@ -379,8 +384,8 @@ class TestChunkingHappensOnce:
 
         result = await _ingest(root, job)
 
-        assert result.outcome is IngestionOutcome.CHUNKED
-        assert (await _row(job.document_id))[0] == "chunked"
+        assert result.outcome is IngestionOutcome.READY
+        assert (await _row(job.document_id))[0] == "ready"
 
     async def test_each_stage_commits_its_own_work(
         self, committing_session: Any, root: Path
@@ -430,9 +435,15 @@ class TestChunkingHappensOnce:
         chunks_written = events.index("INSERT document_chunks")
         assert "COMMIT" in events[chunks_written:], "the chunks are committed too"
 
-    async def test_a_chunked_document_is_not_chunked_again(
+    async def test_a_finished_document_is_not_chunked_again(
         self, committing_session: Any, root: Path
     ) -> None:
+        """Since M3/S3.5 the first delivery ends at `ready`, not `chunked`.
+
+        The property is the same one S3.4 asserted — a redelivery does not
+        chunk a document that has already been chunked — and it is now
+        protected by the terminal check rather than by the `chunked` one.
+        """
         owner = await _owner(committing_session)
         job = await _upload(committing_session, root, owner)
         await _ingest(root, job)
@@ -441,7 +452,7 @@ class TestChunkingHappensOnce:
 
         result = await _ingest(root, job, chunker=chunker)
 
-        assert result.outcome is IngestionOutcome.SKIPPED_CHUNKED
+        assert result.outcome is IngestionOutcome.SKIPPED_TERMINAL
         assert chunker.calls == 0
         assert await _chunk_rows(job.document_id) == before
 
@@ -458,7 +469,7 @@ class TestChunkingHappensOnce:
         )
 
         assert chunker.calls == 1
-        assert [r.outcome for r in results].count(IngestionOutcome.CHUNKED) == 1
+        assert [r.outcome for r in results].count(IngestionOutcome.READY) == 1
         rows = await _chunk_rows(job.document_id)
         assert [row.chunk_index for row in rows] == list(range(len(rows)))
 
@@ -474,7 +485,7 @@ class TestChunkingHappensOnce:
 
         result = await _ingest(root, job)
 
-        assert result.outcome is IngestionOutcome.CHUNKED
+        assert result.outcome is IngestionOutcome.READY
         rows = await _chunk_rows(job.document_id)
         assert [row.chunk_index for row in rows] == list(range(len(rows)))
 
@@ -677,8 +688,8 @@ class TestFailures:
 
         result = await _ingest(root, job)
 
-        assert result.outcome is IngestionOutcome.CHUNKED
-        assert (await _row(job.document_id))[0] == "chunked"
+        assert result.outcome is IngestionOutcome.READY
+        assert (await _row(job.document_id))[0] == "ready"
         assert await _chunk_rows(job.document_id)
 
     async def test_on_the_last_attempt_a_write_failure_fails_the_document(

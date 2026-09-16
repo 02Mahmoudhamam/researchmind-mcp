@@ -148,7 +148,10 @@ class TestEmbedding:
                 "How is retrieval quality measured?",
             ]
         )
-        dot = lambda a, b: sum(x * y for x, y in zip(a, b))  # noqa: E731
+
+        def dot(a: tuple[float, ...], b: tuple[float, ...]) -> float:
+            return sum(x * y for x, y in zip(a, b))
+
         assert dot(query, related) > dot(query, unrelated)
 
     async def test_nothing_to_embed_calls_no_model(
@@ -265,7 +268,7 @@ class TestTheModelsTokenizerIsAuthoritative:
         self, embedding_provider: FastEmbedProvider
     ) -> None:
         """Our copy must not have reconfigured the instance the model embeds with."""
-        inner = embedding_provider._model.model.tokenizer
+        inner = getattr(embedding_provider._model.model, "tokenizer")
         assert inner.truncation["max_length"] == 512
 
     def test_special_tokens_are_not_counted(
@@ -281,7 +284,7 @@ class TestTheModelsTokenizerIsAuthoritative:
         self, embedding_provider: FastEmbedProvider
     ) -> None:
         """The two the budget must leave room for, measured not assumed."""
-        inner = embedding_provider._model.model.tokenizer
+        inner = getattr(embedding_provider._model.model, "tokenizer")
         encoding = inner.encode("hello")
         assert sum(encoding.special_tokens_mask) == SPECIAL_TOKENS_PER_SEQUENCE == 2
 

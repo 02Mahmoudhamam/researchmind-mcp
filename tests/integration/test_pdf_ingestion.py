@@ -41,9 +41,9 @@ from backend.services.ingestion_service import (
     TransientIngestionError,
 )
 from backend.storage import LocalStorage
-from document_processing.chunker import SectionAwareChunker
+from document_processing.chunker import STRATEGY_VERSION, SectionAwareChunker
 from document_processing.pdf_parser import PyMuPDFTextExtractor
-from document_processing.tokenization import RegexTokenizer
+from document_processing.tokenization import RegexTokenizer, TOKENIZER_ID
 from document_processing.validation import PDF_MIME_TYPE, content_hash
 from shared.interfaces.pdf_extraction import (
     ExtractionFailure,
@@ -55,6 +55,7 @@ from shared.models.extraction import ExtractedPage, ExtractedText, TextBlock
 from shared.models.ingestion import IngestionJob, IngestionOutcome, IngestionReason
 from shared.models.principal import Principal
 from tests import extraction_helpers
+from tests.doubles import InMemoryVectorStore, StubEmbeddingProvider
 from tests.pdfs import (
     make_encrypted_pdf,
     make_image_only_pdf,
@@ -210,6 +211,10 @@ async def _ingest(
             chunker=SectionAwareChunker(
                 RegexTokenizer(), chunk_size=400, chunk_overlap=60
             ),
+            embedder=StubEmbeddingProvider(),
+            vectors=InMemoryVectorStore(),
+            strategy_version=STRATEGY_VERSION,
+            tokenizer_id=TOKENIZER_ID,
             max_pages=max_pages or get_settings().MAX_PDF_PAGES,
         ).ingest(job, final_attempt=final)
 
@@ -265,8 +270,8 @@ class TestAVerifiedPdfIsParsedAndStored:
 
         result = await _ingest(root, job)
 
-        assert result.outcome is IngestionOutcome.CHUNKED, "parsed, then chunked"
-        assert await _row(job.document_id) == ("chunked", None)
+        assert result.outcome is IngestionOutcome.READY, "parsed, then chunked"
+        assert await _row(job.document_id) == ("ready", None)
         pages = await _pages(job.document_id, owner.user_id)
         assert [(page.page_number, page.text) for page in pages] == [
             (1, "Introduction text"),
@@ -345,7 +350,7 @@ class TestAVerifiedPdfIsParsedAndStored:
         )
 
         assert response.status_code == 200
-        assert response.json()["status"] == "chunked"
+        assert response.json()["status"] == "ready"
         assert "CONFIDENTIAL-FINDING" not in response.text
 
     async def test_the_logs_carry_counts_never_the_text(
@@ -416,7 +421,7 @@ class TestAPdfThatCannotBeParsedFailsWithItsReason:
 
         result = await _ingest(root, job, max_pages=3)
 
-        assert result.outcome is IngestionOutcome.CHUNKED
+        assert result.outcome is IngestionOutcome.READY
 
     async def test_over_the_limit_by_its_recorded_count_nothing_is_even_read(
         self, committing_session: Any, root: Path
@@ -597,7 +602,10 @@ class TestParsingHappensOnce:
 
         result = await _ingest(root, job, extractor=extractor)
 
-        assert result.outcome is IngestionOutcome.SKIPPED_CHUNKED
+        # One delivery now carries the document all the way to `ready`
+        # (M3/S3.5), so the redelivery meets a terminal status. What this test
+        # is about is unchanged: the extractor is not called a second time.
+        assert result.outcome is IngestionOutcome.SKIPPED_TERMINAL
         assert extractor.calls == 0
         assert len(await _page_rows(job.document_id)) == 3
 
@@ -613,7 +621,7 @@ class TestParsingHappensOnce:
         )
 
         assert extractor.calls == 1
-        assert [r.outcome for r in results].count(IngestionOutcome.CHUNKED) == 1
+        assert [r.outcome for r in results].count(IngestionOutcome.READY) == 1
         assert [n for n, _ in await _page_rows(job.document_id)] == [1, 2, 3]
 
     async def test_a_retry_after_a_transient_failure_stores_one_copy(
@@ -630,7 +638,7 @@ class TestParsingHappensOnce:
 
         result = await _ingest(root, job)
 
-        assert result.outcome is IngestionOutcome.CHUNKED
+        assert result.outcome is IngestionOutcome.READY
         assert [n for n, _ in await _page_rows(job.document_id)] == [1, 2]
 
     async def test_the_database_refuses_a_second_copy_of_a_page(
@@ -775,7 +783,7 @@ class TestNothingIsHalfStored:
 
         result = await _ingest(root, job)
 
-        assert result.outcome is IngestionOutcome.CHUNKED
+        assert result.outcome is IngestionOutcome.READY
         assert [n for n, _ in await _page_rows(job.document_id)] == [1, 2]
 
     async def test_on_the_last_attempt_it_fails_with_nothing_stored(
@@ -816,6 +824,10 @@ class TestNothingIsHalfStored:
                     chunker=SectionAwareChunker(
                         RegexTokenizer(), chunk_size=400, chunk_overlap=60
                     ),
+                    embedder=StubEmbeddingProvider(),
+                    vectors=InMemoryVectorStore(),
+                    strategy_version=STRATEGY_VERSION,
+                    tokenizer_id=TOKENIZER_ID,
                     max_pages=10,
                 ).reap_stale_processing(stale_after_seconds=60)
 

@@ -14,6 +14,8 @@ model it is, because a vector means nothing without knowing what made it.
 
 from typing import Protocol, Sequence
 
+from shared.interfaces.tokenization import Tokenizer
+
 # A vector as the application passes it around: plain floats, never a tensor.
 Vector = tuple[float, ...]
 
@@ -36,6 +38,20 @@ class EmbeddingProvider(Protocol):
     # sized to fit inside it (ADR-0013 §1); the worker refuses to start if they
     # are not.
     max_input_tokens: int
+
+    @property
+    def tokenizer(self) -> Tokenizer:
+        """The model's **own** tokenizer — what sizes the chunks it will embed.
+
+        On the protocol rather than on one implementation, because a provider
+        whose tokenizer nobody can reach forces the chunker back onto a
+        stand-in, which is exactly the situation ADR-0012 §2 recorded as
+        provisional and ADR-0013 §1 ends.
+
+        Read-only: the provider owns it, and a caller who could swap it could
+        make the ruler disagree with the model again.
+        """
+        ...
 
     async def embed_documents(self, texts: Sequence[str]) -> tuple[Vector, ...]:
         """Embed chunk text, in the order given, one vector each.

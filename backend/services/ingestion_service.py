@@ -30,14 +30,22 @@ The order of a delivery, and why each step is where it is:
    pages while it is not.
 8. **Chunk** (M3/S3.4): claim `parsed → processing`, read the pages back
    owner-scoped, split them into section-aware chunks, and store those with
-   `processing → chunked` in one transaction. `ready` means searchable
-   (ADR-0009, the M3 definition of done) and chunks are not searchable until
-   M4 embeds them — so `chunked`, not `ready`.
+   `processing → chunked` in one transaction.
+9. **Embed** (M3/S3.5): claim `chunked → processing`; re-chunk first if the
+   stored chunks were sized by a strategy or tokenizer this pipeline no longer
+   produces; embed the chunk text; upsert the vectors; and only then commit
+   `processing → ready` with the model recorded on every chunk. `ready` means
+   searchable (ADR-0009, the M3 definition of done), so it is set **after** the
+   vectors exist and nowhere else (ADR-0013 §3).
 
-A delivery runs every stage the document is ready for: an upload is parsed and
-then chunked by the same job, and a job that finds a `parsed` document chunks
-it. Each stage is its own claim, its own transaction and its own retry, so a
-failure in one never undoes the other.
+A delivery runs every stage the document is ready for: an upload is parsed,
+chunked and embedded by the same job, and a job that finds a `parsed` or
+`chunked` document carries on from there. Each stage is its own claim, its own
+transaction and its own retry, so a failure in one never undoes the other.
+
+Embedding and the vector store are reached through protocols
+(`EmbeddingProvider`, `VectorStore`), so this module names no model, no vendor
+and no collection — the same way it has never named ARQ or a PDF library.
 
 Failures after the claim move `processing → failed`, which is the lifecycle
 ADR-0009 §4 draws: a document fails *while being processed*, never straight out
@@ -66,6 +74,7 @@ from backend.db.repositories import (
 )
 from document_processing.validation import PDF_MIME_TYPE, content_hash
 from shared.interfaces.chunking import DocumentChunker
+from shared.interfaces.embedding import EmbeddingError, EmbeddingProvider
 from shared.interfaces.ingestion import IngestionQueue
 from shared.interfaces.pdf_extraction import PdfExtractionError, PdfTextExtractor
 from shared.interfaces.storage import (
@@ -74,7 +83,13 @@ from shared.interfaces.storage import (
     StorageObjectMissing,
     document_storage_key,
 )
-from shared.models.document import DocumentStatus
+from shared.interfaces.vector_store import (
+    VectorPayload,
+    VectorRecord,
+    VectorStore,
+    VectorStoreError,
+)
+from shared.models.document import DocumentChunk, DocumentStatus
 from shared.models.chunking import ChunkingResult
 from shared.models.extraction import ExtractedPage, ExtractedText
 from shared.models.ingestion import (
@@ -91,9 +106,15 @@ _log = get_logger(__name__)
 
 # The statuses a delivery can still advance: where the recovery sweep looks, and
 # what a final attempt claims before recording that it gave up. `parsed` joined
-# `pending` in M3/S3.4 — a document whose job died between parsing and chunking
-# is as stranded as one whose job never reached Redis.
-RECOVERABLE_STATUSES = (DocumentStatus.PENDING, DocumentStatus.PARSED)
+# `pending` in M3/S3.4 and `chunked` in M3/S3.5 — a document whose job died
+# between two stages is as stranded as one whose job never reached Redis, and
+# since S3.5 `chunked` is a stage's starting point rather than the end of the
+# pipeline.
+RECOVERABLE_STATUSES = (
+    DocumentStatus.PENDING,
+    DocumentStatus.PARSED,
+    DocumentStatus.CHUNKED,
+)
 
 
 class TransientIngestionError(Exception):
@@ -123,6 +144,7 @@ class _Stage:
 # attempt did (M3/S3.4).
 _PARSE = _Stage("parse", DocumentStatus.PENDING)
 _CHUNK = _Stage("chunk", DocumentStatus.PARSED)
+_EMBED = _Stage("embed", DocumentStatus.CHUNKED)
 
 
 class IngestionService:
@@ -135,21 +157,38 @@ class IngestionService:
         *,
         extractor: PdfTextExtractor,
         chunker: DocumentChunker,
+        embedder: EmbeddingProvider,
+        vectors: VectorStore,
         max_pages: int,
+        strategy_version: str,
+        tokenizer_id: str,
     ) -> None:
         """
         :param extractor: reads text from verified PDF bytes, within its own
             time budget.
         :param chunker: splits a parsed document's pages into chunks.
+        :param embedder: turns chunk text into vectors. A protocol, so this
+            service names no model and imports no vendor (ADR-0005 §3).
+        :param vectors: where those vectors are persisted.
         :param max_pages: the most pages a document may have — the upload cap,
             enforced again here because stored bytes and old rows predate any
             later change to it.
+        :param strategy_version: the chunking strategy this pipeline currently
+            produces.
+        :param tokenizer_id: the tokenizer it currently sizes chunks with.
+            Together these two decide whether a `chunked` document's existing
+            chunks may be embedded or must be made again (ADR-0013 §2). They
+            are passed in rather than read from the chunker, so the comparison
+            is against what this worker is configured to produce.
         """
         self._session = session
         self._storage = storage
         self._extractor = extractor
         self._chunker = chunker
+        self._embedder = embedder
+        self._vectors = vectors
         self._max_pages = max_pages
+        self._version = (strategy_version, tokenizer_id)
         self._documents = DocumentRepository(session)
         self._pages = DocumentPageRepository(session)
         self._chunks = DocumentChunkRepository(session)
@@ -200,9 +239,6 @@ class IngestionService:
         if target.status is DocumentStatus.PROCESSING:
             await self._session.rollback()
             return self._skipped(job, IngestionOutcome.SKIPPED_IN_PROGRESS)
-        if target.status is DocumentStatus.CHUNKED:
-            await self._session.rollback()
-            return self._skipped(job, IngestionOutcome.SKIPPED_CHUNKED)
         if target.status in (DocumentStatus.READY, DocumentStatus.FAILED):
             await self._session.rollback()
             return self._skipped(job, IngestionOutcome.SKIPPED_TERMINAL)
@@ -219,7 +255,16 @@ class IngestionService:
             # Parsed by this delivery, so the next stage is this delivery's too:
             # waiting for the sweep to hand the document back would be a minute
             # of latency for work already in hand.
-        return await self._run(job, target, stage=_CHUNK, final_attempt=final_attempt)
+        if target.status is not DocumentStatus.CHUNKED:
+            chunked = await self._run(
+                job, target, stage=_CHUNK, final_attempt=final_attempt
+            )
+            if chunked.outcome is not IngestionOutcome.CHUNKED:
+                return chunked
+        # `chunked` is no longer where a document stops (M3/S3.5). A delivery
+        # that finds one embeds it, and one that has just produced chunks goes
+        # straight on, for the same reason chunking follows parsing here.
+        return await self._run(job, target, stage=_EMBED, final_attempt=final_attempt)
 
     async def _run(
         self,
@@ -252,7 +297,9 @@ class IngestionService:
                 return await self._process_claimed(
                     job, target, final_attempt=final_attempt
                 )
-            return await self._chunk_claimed(job, final_attempt=final_attempt)
+            if stage is _CHUNK:
+                return await self._chunk_claimed(job, final_attempt=final_attempt)
+            return await self._embed_claimed(job, final_attempt=final_attempt)
         except asyncio.CancelledError:
             # The job was cancelled — a timeout or a worker shutting down. Put the
             # document back so the next delivery can take it, rather than leaving
@@ -475,6 +522,283 @@ class IngestionService:
         except Exception:
             await self._session.rollback()
             raise
+
+    async def _embed_claimed(
+        self, job: IngestionJob, *, final_attempt: bool
+    ) -> IngestionResult:
+        """Everything done while holding the embedding claim (M3/S3.5).
+
+        The order is ADR-0013's, and each step is where it is for a reason:
+
+        1. **Check the chunks' provenance.** Chunks sized by a different
+           strategy or tokenizer have boundaries this model did not choose, so
+           they are made again before anything embeds them.
+        2. **Re-chunk if they are stale** — vectors first, then chunks, in a
+           transaction of its own.
+        3. **Embed**, holding no transaction. Embedding is CPU work measured in
+           seconds; a database transaction held across it would keep a row
+           locked for no reason and put a connection at the mercy of a model.
+        4. **Upsert**, and only then
+        5. **commit `processing → ready`** with the model recorded on every
+           chunk. Qdrant before PostgreSQL, because the two cannot share a
+           transaction: a crash between them leaves vectors for a `processing`
+           document, which a retry overwrites, and the reverse order would
+           allow `ready` with no vectors — the one state a client cannot
+           detect (ADR-0013 §3).
+        """
+        try:
+            provenance = await self._chunks.provenance_for_document(
+                job.document_id, job.owner_id
+            )
+        finally:
+            await self._session.rollback()
+
+        if not provenance:
+            # `chunked` says its chunks were stored; they are not there now.
+            return await self._fail(job, IngestionReason.NO_CHUNKS_TO_EMBED)
+
+        # One pair, and ours. More than one means an interrupted re-chunk left
+        # two generations behind, and is treated exactly as a stale one.
+        if provenance != {self._version}:
+            rechunked = await self._rechunk(job, final_attempt=final_attempt)
+            if rechunked is not None:
+                return rechunked
+
+        try:
+            chunks = await self._chunks.list_for_document(job.document_id, job.owner_id)
+        finally:
+            await self._session.rollback()
+        if not chunks:
+            return await self._fail(job, IngestionReason.NO_CHUNKS_TO_EMBED)
+
+        try:
+            vectors = await self._embedder.embed_documents(
+                [chunk.content for chunk in chunks]
+            )
+        except EmbeddingError:
+            return await self._transient(
+                job,
+                IngestionReason.EMBEDDING_FAILURE,
+                final_attempt=final_attempt,
+                release_to=DocumentStatus.CHUNKED,
+            )
+        if any(len(vector) != self._embedder.dimension for vector in vectors):
+            # The provider checks this too. Checked again here because the
+            # collection was built from `dimension` at startup, and a vector of
+            # another width would be refused by Qdrant *after* the work was done.
+            return await self._fail(job, IngestionReason.EMBEDDING_DIMENSION_MISMATCH)
+
+        try:
+            records = [
+                VectorRecord(
+                    id=chunk.id,
+                    vector=vector,
+                    payload=self._payload_for(job, chunk),
+                )
+                for chunk, vector in zip(chunks, vectors)
+            ]
+        except ValueError:
+            # A chunk row that cannot be cited. Migration 0006 made the page
+            # columns NOT NULL, so this means a row older than the provenance
+            # the pipeline now requires — permanent, and not this delivery's to
+            # repair.
+            return await self._fail(job, IngestionReason.PROCESSING_FAILURE)
+        try:
+            await self._vectors.upsert(records)
+        except VectorStoreError:
+            return await self._transient(
+                job,
+                IngestionReason.VECTOR_STORE_FAILURE,
+                final_attempt=final_attempt,
+                release_to=DocumentStatus.CHUNKED,
+            )
+
+        try:
+            stored = await self._store_ready(job)
+        except Exception:
+            # The vectors are written and the status is not. The document stays
+            # `processing`, this delivery retries or fails, and the next one
+            # upserts the same point ids over the same points.
+            return await self._transient(
+                job,
+                IngestionReason.PROCESSING_FAILURE,
+                final_attempt=final_attempt,
+                release_to=DocumentStatus.CHUNKED,
+            )
+        if not stored:
+            return self._claim_lost(job)
+        _log.info(
+            "ingestion.ready",
+            document_id=job.document_id,
+            owner_id=job.owner_id,
+            chunk_count=len(chunks),
+            embedding_model_id=self._embedder.model_id,
+            dimension=self._embedder.dimension,
+            status=DocumentStatus.READY.value,
+        )
+        return IngestionResult(
+            outcome=IngestionOutcome.READY, document_id=job.document_id
+        )
+
+    async def _rechunk(
+        self, job: IngestionJob, *, final_attempt: bool
+    ) -> IngestionResult | None:
+        """Make this document's chunks again, with the current configuration.
+
+        Returns None when the document is ready to embed, or a result when the
+        delivery is over. Not a migration and not a script: the chunks say what
+        made them, so what needs redoing is a comparison rather than a date
+        (ADR-0013 §2). The document's pages are untouched — they are the source,
+        and re-chunking derives from them exactly as the first chunking did.
+        """
+        try:
+            pages = await self._pages.list_for_document(job.document_id, job.owner_id)
+        finally:
+            await self._session.rollback()
+        if not pages:
+            # Chunks from an older version, and no pages to make new ones from.
+            # Embedding the old ones would bake in boundaries this model did
+            # not choose, so the document fails rather than lying about itself.
+            return await self._fail(job, IngestionReason.NO_CHUNKS_TO_EMBED)
+
+        try:
+            chunking = await anyio.to_thread.run_sync(self._chunk_pages, pages)
+        except Exception:
+            return await self._transient(
+                job,
+                IngestionReason.CHUNKING_FAILURE,
+                final_attempt=final_attempt,
+                release_to=DocumentStatus.CHUNKED,
+            )
+        if not chunking.chunks:
+            return await self._fail(job, IngestionReason.NO_CHUNKS_PRODUCED)
+
+        # The old vectors go first, outside the database transaction. Their ids
+        # are derived from the old strategy and tokenizer, so the new upsert
+        # will not overwrite them and they would linger in the collection —
+        # searchable, attributed to this document, and of a generation that no
+        # longer exists. Deleting before the new chunks are written means a
+        # crash in between leaves a `processing` document with no vectors,
+        # which the retry rebuilds.
+        try:
+            await self._vectors.delete_document(
+                document_id=job.document_id, owner_id=job.owner_id
+            )
+        except VectorStoreError:
+            return await self._transient(
+                job,
+                IngestionReason.VECTOR_STORE_FAILURE,
+                final_attempt=final_attempt,
+                release_to=DocumentStatus.CHUNKED,
+            )
+
+        try:
+            replaced = await self._replace_chunks(job, chunking)
+        except Exception:
+            return await self._transient(
+                job,
+                IngestionReason.CHUNKING_FAILURE,
+                final_attempt=final_attempt,
+                release_to=DocumentStatus.CHUNKED,
+            )
+        if not replaced:
+            return self._claim_lost(job)
+        _log.info(
+            "ingestion.rechunked",
+            document_id=job.document_id,
+            owner_id=job.owner_id,
+            chunk_count=len(chunking.chunks),
+            strategy_version=chunking.strategy_version,
+            tokenizer_id=chunking.tokenizer_id,
+        )
+        return None
+
+    async def _replace_chunks(
+        self, job: IngestionJob, chunking: ChunkingResult
+    ) -> bool:
+        """Delete the old chunks and write the new ones: one transaction.
+
+        The document stays `processing` throughout — it is this delivery's
+        claim, and the status only moves when the vectors exist. `chunk_count`
+        is updated with the rows, so the two can never disagree.
+        """
+        try:
+            moved = await self._documents.transition_status_for_user(
+                job.document_id,
+                job.owner_id,
+                expected=DocumentStatus.PROCESSING,
+                new=DocumentStatus.PROCESSING,
+                chunk_count=len(chunking.chunks),
+            )
+            if not moved:
+                await self._session.rollback()
+                return False
+            await self._chunks.delete_for_document(job.document_id, job.owner_id)
+            await self._chunks.add_many(
+                document_id=job.document_id,
+                user_id=job.owner_id,
+                chunking=chunking,
+            )
+            await self._session.commit()
+            return True
+        except Exception:
+            await self._session.rollback()
+            raise
+
+    async def _store_ready(self, job: IngestionJob) -> bool:
+        """`processing → ready`, and the model on every chunk: one transaction.
+
+        Nothing else in the system sets `ready`, and it is set only here,
+        **after** the upsert returned. A document that is `ready` has chunks,
+        vectors of the current model, and a record of which model that was.
+        """
+        try:
+            moved = await self._documents.transition_status_for_user(
+                job.document_id,
+                job.owner_id,
+                expected=DocumentStatus.PROCESSING,
+                new=DocumentStatus.READY,
+            )
+            if not moved:
+                await self._session.rollback()
+                return False
+            await self._chunks.mark_embedded(
+                job.document_id,
+                job.owner_id,
+                embedding_model_id=self._embedder.model_id,
+                dimension=self._embedder.dimension,
+            )
+            await self._session.commit()
+            return True
+        except Exception:
+            await self._session.rollback()
+            raise
+
+    def _payload_for(self, job: IngestionJob, chunk: DocumentChunk) -> VectorPayload:
+        """What travels with a vector: enough to cite it, and nothing more.
+
+        No chunk text (ADR-0013 §5): the content is in PostgreSQL, the vector
+        store holds what retrieval needs to find and attribute it.
+        """
+        if chunk.page_start is None or chunk.page_end is None:
+            # `document_chunks.page_start`/`page_end` are NOT NULL since
+            # migration 0006; the API model still allows None, and a citation
+            # without pages is not a citation.
+            raise ValueError("a chunk without pages cannot be cited")
+        strategy_version, tokenizer_id = self._version
+        return VectorPayload(
+            user_id=job.owner_id,
+            document_id=job.document_id,
+            chunk_id=chunk.id,
+            chunk_index=chunk.chunk_index,
+            section=chunk.section,
+            page_start=chunk.page_start,
+            page_end=chunk.page_end,
+            strategy_version=strategy_version,
+            tokenizer_id=tokenizer_id,
+            embedding_model_id=self._embedder.model_id,
+            dimension=self._embedder.dimension,
+        )
 
     async def reap_stale_processing(self, *, stale_after_seconds: int) -> list[str]:
         """Fail documents whose claim has outlived any possible worker (ADR-0009 §6).
