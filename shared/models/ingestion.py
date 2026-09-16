@@ -84,6 +84,15 @@ class IngestionReason(str, Enum):
     # A valid PDF with no text on any page — typically a scan. There is no OCR.
     NO_EXTRACTABLE_TEXT = "no_extractable_text"
 
+    # Chunking (M3/S3.4).
+    # A `parsed` document whose pages are gone: nothing to chunk, and nothing
+    # that will bring them back without re-parsing.
+    NO_EXTRACTED_PAGES = "no_extracted_pages"
+    # Pages that hold no text a chunk could be made of.
+    NO_CHUNKS_PRODUCED = "no_chunks_produced"
+    # The chunker itself failed.
+    CHUNKING_FAILURE = "chunking_failure"
+
     # Documents that were `error` before migration 0004 introduced reasons.
     UNKNOWN = "unknown"
 
@@ -97,8 +106,10 @@ class IngestionOutcome(str, Enum):
     PARSED = "parsed"
     # Another delivery holds the claim. Nothing was done.
     SKIPPED_IN_PROGRESS = "skipped_in_progress"
-    # The document is already `parsed`: this job's work is done. Nothing was done.
-    SKIPPED_PARSED = "skipped_parsed"
+    # Chunked and stored; the document is now `chunked` (M3/S3.4).
+    CHUNKED = "chunked"
+    # The document is already `chunked`: this job's work is done.
+    SKIPPED_CHUNKED = "skipped_chunked"
     # The document is already `ready` or `failed`. Nothing was done.
     SKIPPED_TERMINAL = "skipped_terminal"
     # The job was not acted on; the document was not changed.

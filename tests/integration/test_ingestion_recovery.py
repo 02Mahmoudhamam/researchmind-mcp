@@ -37,7 +37,9 @@ from backend.ingestion.worker import ingest_document, recover_pending_documents
 from backend.services.document_service import DocumentService
 from backend.services.ingestion_service import IngestionService
 from backend.storage import LocalStorage
+from document_processing.chunker import SectionAwareChunker
 from document_processing.pdf_parser import PyMuPDFTextExtractor
+from document_processing.tokenization import RegexTokenizer
 from shared.interfaces.storage import StorageError, document_storage_key
 from shared.models.document import DocumentType
 from shared.models.ingestion import IngestionJob, RecoveryResult
@@ -143,6 +145,7 @@ def _service(session: Any, root: Path) -> IngestionService:
         session,
         LocalStorage(root),
         extractor=PyMuPDFTextExtractor(timeout_seconds=60, max_concurrency=4),
+        chunker=SectionAwareChunker(RegexTokenizer(), chunk_size=400, chunk_overlap=60),
         max_pages=get_settings().MAX_PDF_PAGES,
     )
 
@@ -450,7 +453,7 @@ class TestTheWorker:
 
         assert storage.gets == 1, "the recovered job ran exactly once"
         assert worker.jobs_complete >= 2  # the cron pass, and the recovered job
-        assert await _status(job.document_id) == ("parsed", None)
+        assert await _status(job.document_id) == ("chunked", None)
 
     async def test_a_final_attempt_that_gives_up_records_the_failure(
         self,

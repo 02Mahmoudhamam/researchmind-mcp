@@ -267,7 +267,7 @@ class TestUploadThroughTheWorker:
         worker = await _run_worker()
 
         assert (worker.jobs_complete, worker.jobs_failed) == (1, 0)
-        assert await _status(document_id) == ("parsed", None)
+        assert await _status(document_id) == ("chunked", None)
         assert await _queued_job_ids() == []
 
     async def test_a_tampered_upload_fails_in_the_worker(
@@ -344,7 +344,7 @@ class TestTheWorkerTask:
 
         assert worker.jobs_retried == 2
         assert flaky.gets == 3
-        assert await _status(job.document_id) == ("parsed", None)
+        assert await _status(job.document_id) == ("chunked", None)
 
     async def test_retries_end_in_a_terminal_failure_not_an_endless_loop(
         self, committing_session: Any, storage_root: Path
