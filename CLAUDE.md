@@ -70,8 +70,10 @@ was on this list from the scaffold onward and is **gone as of M2/S2.3**, replace
 by `bcrypt` used directly: it was never imported once, and left installed it
 selects a hashing backend at import time, falling through to stdlib `crypt` —
 removed in Python 3.13.
-**Required but undeclared:** `openai` (the default embedding model is
-`text-embedding-3-small`). `email-validator` was also missing and is now declared via
+~~**Required but undeclared:** `openai`~~ — **RESOLVED in M3/S3.5.** The OpenAI
+default is gone: embeddings are ADR-0004's local FastEmbed
+`BAAI/bge-small-en-v1.5` (384 dimensions), and no `OPENAI_API_KEY` exists
+anywhere. `email-validator` was also missing and is now declared via
 the `pydantic[email]` extra (M0/S0.1); before that, `shared/models/user.py` and
 `backend/api/schemas/auth.py` could not be imported at all.
 
@@ -85,6 +87,7 @@ the `pydantic[email]` extra (M0/S0.1); before that, `shared/models/user.py` and
 | FastAPI app object | `backend.api.app:app` | [backend/api/app.py](backend/api/app.py) |
 | MCP server (stdio) | `python -m mcp_server.server.server` | [mcp_server/server/server.py](mcp_server/server/server.py) |
 | Ingestion worker (M3/S3.2) | `arq backend.ingestion.worker_settings.WorkerSettings` | [backend/ingestion/worker_settings.py](backend/ingestion/worker_settings.py) |
+| Fetch the embedding model (M3/S3.5) | `python scripts/fetch-embedding-model.py` | [scripts/fetch-embedding-model.py](scripts/fetch-embedding-model.py) |
 | Frontend | `npm run dev` in `frontend/` | [frontend/package.json](frontend/package.json) |
 | All services | `docker-compose up -d` — **currently broken, see below** | [docker-compose.yml](docker-compose.yml) |
 
@@ -130,7 +133,7 @@ stub returns the right type). There is **no RAG evaluation of any kind**.
 | Storage | [backend/storage/](backend/storage/), [shared/interfaces/storage.py](shared/interfaces/storage.py) | **Complete (M3/S3.1)** — `Storage` protocol and `LocalStorage`, content-addressed `{user_id}/{sha256}.pdf` (ADR-0008); atomic writes; filename never forms a path |
 | Upload validation | [document_processing/validation.py](document_processing/validation.py) | **Complete (M3/S3.1)** — magic bytes, size cap, page cap, password-protected refusal, filename sanitising. Structure only; parsing is still a stub |
 | Ingestion worker | [shared/models/ingestion.py](shared/models/ingestion.py), [backend/ingestion/](backend/ingestion/), [backend/services/ingestion_service.py](backend/services/ingestion_service.py) | **Complete (M3/S3.2)** — `ArqIngestionQueue`, an ARQ worker and compose service. Verifies each job against the database (owner-scoped) and the stored bytes against their SHA-256, persists `failed` with a reason code, retries transient failures a bounded number of times, reaps stale claims, and re-queues documents no job will pick up (`pending` since M3/S3.3, `parsed` since M3/S3.4). A verified PDF is parsed (S3.3) and chunked (S3.4) by the same delivery and becomes **`chunked`** — never `ready`, which means searchable. See [docs/development/ingestion.md](docs/development/ingestion.md) |
-| Chunking | [document_processing/chunker.py](document_processing/chunker.py), [document_processing/sections.py](document_processing/sections.py), [document_processing/tokenization.py](document_processing/tokenization.py) | **Complete (M3/S3.4)** — deterministic heading detection, token windows inside sections, references split on entry boundaries, fixed-window fallback; behind a `Tokenizer` seam whose implementation (`regex-word/v1`) is **provisional until M4 fixes the embedding model**. Chunks carry section, page span, token count, strategy and tokenizer. See [docs/development/chunking.md](docs/development/chunking.md) and ADR-0012 |
+| Chunking | [document_processing/chunker.py](document_processing/chunker.py), [document_processing/sections.py](document_processing/sections.py), [document_processing/tokenization.py](document_processing/tokenization.py) | **Complete (M3/S3.4)** — deterministic heading detection, token windows inside sections, references split on entry boundaries, fixed-window fallback; behind a `Tokenizer` seam that since M3/S3.5 holds the **embedding model's own** WordPiece tokenizer (`regex-word/v1` remains for callers that must load no model). Chunks carry section, page span, token count, strategy and tokenizer, and their ids are derived from those, so a version change re-chunks and re-embeds deterministically. See [docs/development/chunking.md](docs/development/chunking.md) and ADR-0012 |
 | PDF text extraction | [document_processing/pdf_parser.py](document_processing/pdf_parser.py), [shared/interfaces/pdf_extraction.py](shared/interfaces/pdf_extraction.py) | **Complete (M3/S3.3)** — PyMuPDF block mode, column-aware reading order, cleaned text, per-page storage in `document_pages`; runs in a killable process under `INGEST_PARSE_TIMEOUT_SECONDS`. No OCR: a scan fails as `no_extractable_text`. See [docs/development/pdf-extraction.md](docs/development/pdf-extraction.md) and ADR-0011 (proposed) |
 | Settings | [backend/config/settings.py](backend/config/settings.py) | **Complete** (insecure secret defaults); validates `DATABASE_URL` uses the asyncpg driver |
 | DB infrastructure | [backend/db/](backend/db/) | **Complete (M1/S1.1)** — `Base` + naming convention, lazy async engine, session factory. Models and migrations `0001`–`0006` since (head `0006`, M3/S3.4: chunk provenance columns and the `chunked` status) |
@@ -187,16 +190,20 @@ Edges that **do not exist** despite being documented:
   unwraps `principal.user_id` for the unchanged repositories, and the document list, get
   and delete routes use it — and since M3/S3.1 upload does too, validating, storing at
   `{user_id}/{sha256}.pdf` and recording a `pending` document. Since M3/S3.2 an ARQ
-  worker checks each upload's ownership and bytes, since M3/S3.3 extracts its text and
-  since M3/S3.4 chunks it; nothing embeds or searches it yet. And
+  worker checks each upload's ownership and bytes, since M3/S3.3 extracts its text,
+  since M3/S3.4 chunks it and since M3/S3.5 embeds it into Qdrant and marks it
+  `ready`; nothing searches it yet. And
   tokens are obtained over HTTP as of M2/S2.4: `POST /api/v1/auth/register`
   creates an account and `POST /api/v1/auth/login` issues a 60-minute access
   token that `get_current_user` accepts. `SearchService` remains a stub (M4).
-- **No embedding or search yet.** Since M3/S3.2 upload enqueues to ARQ after commit and a
-  worker verifies the document; since M3/S3.3 it extracts the text into `document_pages`;
-  since M3/S3.4 it splits that into `document_chunks` and the document becomes `chunked`.
-  A recovery sweep re-queues `pending` and `parsed` documents with no job. Nothing embeds,
-  so no document reaches `ready` and nothing is searchable.
+- **No search yet.** The write half of RAG is complete: upload enqueues to ARQ after
+  commit (M3/S3.2), a worker verifies the document, extracts its text into
+  `document_pages` (S3.3), splits that into `document_chunks` (S3.4), embeds them with
+  local FastEmbed and upserts the vectors into Qdrant before committing `ready` (S3.5).
+  A recovery sweep re-queues `pending`, `parsed` and `chunked` documents with no job.
+  What is missing is the **read** half: `SearchService` is a stub, no route queries the
+  vectors, and ADR-0003 §5's re-validation of returned chunk ids against PostgreSQL is
+  not built. Deleting a document also still leaves its vectors behind (ADR-0003 §6).
 - **No reranker, no hybrid/BM25 search, no query expansion.**
 
 ---
@@ -211,8 +218,10 @@ Edges that **do not exist** despite being documented:
 | Retrieval | `limit=10`, `score_threshold=0.7` | `backend/api/schemas/search.py:9-10` | Client-controllable; dense-only |
 | Generation | `claude-sonnet-4-20250514`, `max_tokens=4096`, `temp=0.3` | `agents/*/config.py` | Identical across all 9 agents, including the Router |
 
-`ensure_collection_exists()` is a stub and is never called — first run against a fresh
-Qdrant will fail.
+`ensure_collection_exists()` was a stub that nothing called. As of M3/S3.5 the
+worker's startup calls `VectorStore.ensure_collection(dimension=…)`, so a fresh
+Qdrant is prepared before any document is claimed, and a collection of the wrong
+width is refused rather than reused.
 
 ---
 
@@ -240,11 +249,16 @@ Qdrant will fail.
   **`mypy --strict` is enforced over the finished surface only**: M2's security files
   (M2/S2.5), M3/S3.1's upload, storage and ingestion boundary, M3/S3.2's ingestion
   service, queue and worker, M3/S3.3's extraction, extraction models and page
-  persistence, and M3/S3.4's chunker, sections, tokenizer and chunk persistence pass
+  persistence, M3/S3.4's chunker, sections, tokenizer and chunk persistence, and
+  M3/S3.5's embedding provider, vector-store seam and Qdrant adapter pass
   strict with no ignores, and CI fails if they stop.
-  Repository-wide `mypy .` still reports **113 errors**, mostly `empty-body` in M4–M6
+  Repository-wide `mypy .` reports **104 errors** (was 113 before M3/S3.5, which
+  replaced several stubs with real code), mostly `empty-body` in M4–M6
   stubs, and is not enforced; each sprint adds the files it makes real to the list in
   `ci-backend.yml`.
+  CI also runs its own **Qdrant** service and caches the embedding model's
+  weights, with `REQUIRE_QDRANT=1` and `REQUIRE_EMBEDDINGS=1` so the tests that
+  need them fail rather than skip.
 
 ---
 
@@ -261,7 +275,9 @@ Qdrant will fail.
    unresolvable token with **401**. Identity is resolved by
    `backend/security/authentication.py`, which imports no FastAPI so the MCP adapter can
    reuse it (ADR-0002 §6). Role and email come from the database row, not the token.
-5. **Embedding provider unresolved** — OpenAI default in an Anthropic-only project.
+5. ~~**Embedding provider unresolved**~~ — **RESOLVED in M3/S3.5.** ADR-0004's
+   local FastEmbed `bge-small-en-v1.5`, behind an `EmbeddingProvider` protocol,
+   with the dimension derived from the provider (ADR-0005) rather than a literal.
 6. ~~**Transport contradiction**~~ — **RESOLVED in M0/S0.2.** ADR-0002 settled on stdio; the
    `mcp-server` container, `Dockerfile.mcp` and `MCP_SERVER_HOST`/`PORT` are removed.
 7. ~~**No `LICENSE`**, no `.gitignore`, no `.dockerignore`~~ — **RESOLVED in the Repository

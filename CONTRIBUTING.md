@@ -20,6 +20,7 @@ Read first:
 - [docs/development/ingestion.md](docs/development/ingestion.md) — the ARQ worker: status lifecycle, failure reasons, retries, idempotency, the stale-claim reaper and the recovery sweep
 - [docs/development/pdf-extraction.md](docs/development/pdf-extraction.md) — PDF text extraction: stored format, reading order, cleaning, failures and the time budget
 - [docs/development/chunking.md](docs/development/chunking.md) — section detection and section-aware chunking: the tokenizer seam, references, provenance and the `chunked` status
+- [docs/development/embeddings.md](docs/development/embeddings.md) — embeddings, the vector store and `ready`: the model and its tokenizer, version-driven re-chunking, derived point ids, the owner filter, and why Qdrant is written before PostgreSQL
 - [docs/adr/](docs/adr/) — why the system is shaped this way
 - [docs/security/principles.md](docs/security/principles.md) — non-negotiable invariants
 
@@ -31,7 +32,21 @@ cd frontend && cp .env.example .env.local && cd ..
 ./scripts/check-hygiene.sh
 ```
 
-`docker compose up` does not work yet; Milestone M0 is what fixes it.
+To run the whole suite rather than the part that needs no services:
+
+```bash
+docker compose up -d postgres redis qdrant
+poetry run python scripts/fetch-embedding-model.py    # ~67 MB, once
+env -u PYTHONPATH poetry run pytest
+```
+
+Tests needing a service **skip** when it is unreachable and **fail** in CI,
+where `REQUIRE_DB`, `REQUIRE_REDIS`, `REQUIRE_QDRANT` and `REQUIRE_EMBEDDINGS`
+are all set — a skipped test reports success, so coverage must not be able to
+disappear quietly. See [docs/development/testing.md](docs/development/testing.md).
+
+Note: a `.env` in the repository root is read by `Settings`, including during
+tests, so a value there can change what a test sees.
 
 ## Workflow
 

@@ -20,11 +20,11 @@ document_pages (owner-scoped)
    ▼ commit
 ```
 
-## The tokenizer is a seam, and today's one is provisional
+## The tokenizer is a seam, and since S3.5 the model fills it
 
-ADR-005 sizes chunks with "the active embedding model's tokenizer". That model
-(ADR-0004) is not installed and M4 chooses it, so the chunker depends on
-`Tokenizer`:
+ADR-005 sizes chunks with "the active embedding model's tokenizer". S3.4 was
+written before that model was installed, so the chunker depends on `Tokenizer`
+and never on a model:
 
 | Member | |
 |---|---|
@@ -35,14 +35,21 @@ ADR-005 sizes chunks with "the active embedding model's tokenizer". That model
 **Spans, not `encode`/`decode`**: a chunk's content is then a verbatim substring
 of the page text, with no round trip that could invent whitespace.
 
-`RegexTokenizer`, id **`regex-word/v1`**: word runs (apostrophes kept inside
-words), single punctuation marks, and CJK characters one at a time. It
-**undercounts** against a WordPiece vocabulary, so a 400-token chunk here is
-smaller than 400 of `bge-small`'s — the safe direction, since an undersized
-chunk still embeds while an oversized one is truncated.
+**The worker now passes the embedding model's own tokenizer**,
+`bge-small-en-v1.5/wordpiece` (M3/S3.5, ADR-0013 §1) — the ruler that sizes a
+chunk is the one that reads it. See [embeddings.md](embeddings.md).
 
-**M4 will replace it, and that means re-chunking.** Every chunk records
-`tokenizer_id` and `strategy_version`, so what needs re-running is a query.
+`RegexTokenizer`, id **`regex-word/v1`**, remains in the tree: word runs
+(apostrophes kept inside words), single punctuation marks, and CJK characters
+one at a time, with no dependency and no model to load. It **undercounts**
+against a WordPiece vocabulary — `immunohistochemistry` is one token to it and
+several to the model — which was the safe direction while it was provisional,
+since an undersized chunk still embeds.
+
+**Replacing it means re-chunking, and that is now implemented.** Every chunk
+records `tokenizer_id` and `strategy_version`, and the embed stage compares them
+with what the pipeline currently produces: a mismatch re-chunks the document
+from its stored pages before anything embeds it.
 
 ## Section detection
 
@@ -114,7 +121,7 @@ document):
 | `page_start`, `page_end` | inclusive, 1-based; equal for a chunk inside one page |
 | `token_count` | counted by `tokenizer_id` |
 | `strategy_version` | `section-aware/v1` |
-| `tokenizer_id` | `regex-word/v1` |
+| `tokenizer_id` | `bge-small-en-v1.5/wordpiece` in the worker; `regex-word/v1` wherever no model is loaded |
 
 `documents.chunk_count` is written in the same statement as the status, so a
 document becomes `chunked` and learns how many chunks it has together.
@@ -126,7 +133,10 @@ SQL. **The API exposes no chunks**: a document response shows `status:
 ## Status and the worker
 
 `parsed → processing → chunked`. `chunked` means chunks exist and are stored;
-it is **not searchable**, and nothing sets `ready` (ADR-0011, ADR-0012 §1).
+it is **not yet searchable**. Since M3/S3.5 the same delivery carries on and
+embeds them, and `ready` is committed after the vectors are persisted
+(ADR-0013 §3) — `chunked` is where the embed stage starts, not where the
+pipeline stops.
 
 A delivery runs every stage the document is ready for: an upload is parsed and
 then chunked by the same job, and a job that finds a `parsed` document chunks
@@ -134,16 +144,16 @@ it. Each stage is its own claim, transaction and retry, and a stage releases its
 claim back to where it started — so a chunking failure retries chunking, never
 parsing.
 
-The recovery sweep covers `parsed` as well as `pending`: a job that dies between
-the two stages strands a document just as completely as one whose job never
-reached Redis.
+The recovery sweep covers `parsed` as well as `pending`, and since S3.5
+`chunked` too: a job that dies between two stages strands a document just as
+completely as one whose job never reached Redis.
 
 | Redelivered document | What happens |
 |---|---|
 | `pending` | parsed, then chunked |
 | `parsed` | chunked |
 | `processing` | skipped — another delivery holds the claim |
-| `chunked` | skipped (`skipped_chunked`); the chunker is not called |
+| `chunked` | embedded (S3.5); the chunker is called only if the provenance is stale |
 | `ready`, `failed` | skipped as terminal |
 | deleted | rejected; the owner-scoped read finds nothing |
 
@@ -171,7 +181,9 @@ Logs carry counts, the strategy and the tokenizer — never chunk text.
 
 Settings refuses a non-positive size, a negative overlap, and an overlap at or
 above the size — the chunker steps `size - overlap`, so a step of zero is a loop.
-These are **this tokenizer's** tokens, not an embedding model's.
+Since S3.5 these *are* the embedding model's tokens, and the worker refuses to
+start unless `CHUNK_SIZE_TOKENS` plus the model's two special tokens fits what
+the model reads.
 
 ## Memory
 
@@ -182,9 +194,6 @@ Streaming page by page would break section boundaries, which are the point.
 
 ## Not done
 
-- **No embeddings and no vectors** — M4, and what `ready` waits for.
-- **No re-chunking.** Changing the strategy or tokenizer does not re-chunk
-  anything; the version columns are what make that a query when M4 needs it.
 - **No hierarchy**: a subsection's parent is implicit in its numbering.
 - **Three-column layouts and tables** inherit S3.3's reading-order limits.
 - **Reference entries** are recognised in three numbering styles; anything else

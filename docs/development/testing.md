@@ -151,6 +151,41 @@ by an in-memory one that accepts jobs (an autouse fixture in `conftest.py`), so 
 upload test does not start failing with 503 on a machine without Redis. Tests
 that assert what is queued install their own recording queue on top.
 
+## Tests that need Qdrant and the model: `qdrant` and `embeddings`
+
+M3/S3.5, and the same rule again — skip locally, hard error in CI:
+
+```bash
+docker compose up -d postgres redis qdrant
+poetry run python scripts/fetch-embedding-model.py    # ~67 MB, once
+env -u PYTHONPATH REQUIRE_DB=1 REQUIRE_REDIS=1 \
+    REQUIRE_QDRANT=1 REQUIRE_EMBEDDINGS=1 poetry run pytest
+```
+
+| Marker | Needs | Gate |
+|---|---|---|
+| `qdrant` | a reachable Qdrant | `REQUIRE_QDRANT=1` |
+| `embeddings` | the model's weights, loadable | `REQUIRE_EMBEDDINGS=1` |
+
+Each `qdrant` test builds a collection named after itself and drops it, so
+tests cannot see each other's vectors and a failure cannot strand points that
+make the next run pass for the wrong reason. `embeddings` tests share **one**
+loaded model (a session fixture), because loading it per test would dominate
+the run.
+
+**Neither is mocked where the claim depends on the real thing.** A mocked
+vector store would prove only that the mock filters by owner; the claim is that
+the *server* does, so those tests ask a real Qdrant for another tenant's
+vectors and get nothing back. Likewise the model's dimension, input limit and
+determinism are properties of the model, so the provider tests use it.
+
+Where a test is about something else — the state machine, recovery, parsing —
+it gets `tests/doubles.py`: a deterministic `StubEmbeddingProvider` and an
+`InMemoryVectorStore`, exactly as such tests already get an in-memory queue in
+place of Redis. Both are real implementations of their protocols, and the
+in-memory store **filters by owner**, so a double cannot pass a test that the
+real pipeline would fail.
+
 ## Commands
 
 ```bash
