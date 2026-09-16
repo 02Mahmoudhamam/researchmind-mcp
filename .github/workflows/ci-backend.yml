@@ -12,10 +12,11 @@
 #   Milestone M3    same gate, extended to upload & storage — M3/S3.1
 #                   and to the ingestion worker            — M3/S3.2
 #                   and to PDF text extraction             — M3/S3.3
+#                   and to section-aware chunking          — M3/S3.4
 #
 # mypy is promoted at M2 as scheduled, but over the finished surface only — not
 # the whole repository — and the scope is the honest part. `mypy .` still
-# reports 116 errors, most of them `empty-body`: stubs in M3–M6 subsystems that
+# reports 113 errors, most of them `empty-body`: stubs in M4–M6 subsystems that
 # declare a non-Optional return and then `...`. Those are the unimplemented
 # system, not type bugs, and enforcing them would mean a permanently red
 # pipeline or blanket ignores; both teach people to ignore CI.
@@ -25,8 +26,9 @@
 # passwords, tokens, registration and login; since M3/S3.1 upload validation,
 # content-addressed storage, the ingestion boundary and the document service,
 # repository and models; since M3/S3.2 the ingestion service, ARQ queue and
-# worker; and since M3/S3.3 the PDF extractor, its interface and models, and
-# the extracted-page model and repository. `--follow-imports=silent` limits reporting to
+# worker; since M3/S3.3 the PDF extractor, its interface and models, and the
+# extracted-page model and repository; and since M3/S3.4 the chunker, section
+# detection, the tokenizer and its seam, and chunk persistence. `--follow-imports=silent` limits reporting to
 # the listed files while still type-checking against everything they import.
 # Each later sprint adds the files it makes real.
 name: Backend CI
@@ -154,7 +156,15 @@ jobs:
             shared/interfaces/pdf_extraction.py \
             shared/models/extraction.py \
             backend/db/models/document_page.py \
-            backend/db/repositories/document_page.py
+            backend/db/repositories/document_page.py \
+            document_processing/chunker.py \
+            document_processing/sections.py \
+            document_processing/tokenization.py \
+            shared/interfaces/chunking.py \
+            shared/interfaces/tokenization.py \
+            shared/models/chunking.py \
+            backend/db/models/document_chunk.py \
+            backend/db/repositories/document_chunk.py
 
       - name: Assert `import mcp` resolves to the SDK, not this repository
         run: |
