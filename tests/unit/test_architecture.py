@@ -628,3 +628,96 @@ class TestParsingStaysBehindItsSeams:
 
         for path in request_path:
             assert "document_processing.pdf_parser" not in self._imports(path), path
+
+
+class TestChunkingStaysBehindItsSeams:
+    """M3/S3.4. The chunker is pure: pages in, chunks out. It cannot reach a
+    database, a queue, storage or an identity, because it is never given one."""
+
+    CHUNKER = ROOT / "document_processing" / "chunker.py"
+    SECTIONS = ROOT / "document_processing" / "sections.py"
+    TOKENIZATION = ROOT / "document_processing" / "tokenization.py"
+    INGESTION_SERVICE = ROOT / "backend" / "services" / "ingestion_service.py"
+
+    @staticmethod
+    def _imports(path: pathlib.Path) -> set[str]:
+        import ast
+
+        names: set[str] = set()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                names.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                names.add(node.module or "")
+        return names
+
+    @pytest.mark.parametrize("module", ["CHUNKER", "SECTIONS", "TOKENIZATION"])
+    def test_the_chunking_modules_import_nothing_that_could_reach_a_tenant(
+        self, module: str
+    ) -> None:
+        imports = self._imports(getattr(self, module))
+
+        assert not {name for name in imports if name.startswith("backend")}
+        for forbidden in ("arq", "fastapi", "sqlalchemy", "shared.models.principal"):
+            assert forbidden not in imports, (module, forbidden)
+
+    def test_the_chunker_reads_no_file_and_opens_no_connection(self) -> None:
+        code = _statements(self.CHUNKER) + _statements(self.SECTIONS)
+
+        for forbidden in ("open(", "Path(", "read_bytes", "os.path", "session"):
+            assert forbidden not in code, forbidden
+
+    def test_the_ingestion_service_names_no_chunker_or_tokenizer(self) -> None:
+        """It depends on `DocumentChunker`, so M4 can replace both."""
+        code = _statements(self.INGESTION_SERVICE)
+
+        for forbidden in (
+            "SectionAwareChunker",
+            "RegexTokenizer",
+            "document_processing.chunker",
+            "document_processing.tokenization",
+        ):
+            assert forbidden not in code, forbidden
+
+    def test_the_worker_is_the_only_place_they_are_constructed(self) -> None:
+        constructors = {
+            str(path.relative_to(ROOT))
+            for directory in ("backend", "shared", "mcp_server")
+            for path in sorted((ROOT / directory).rglob("*.py"))
+            if "__pycache__" not in path.parts
+            and (
+                "SectionAwareChunker(" in _statements(path)
+                or "RegexTokenizer(" in _statements(path)
+            )
+        }
+
+        assert constructors == {"backend/ingestion/worker.py"}
+
+    def test_nothing_in_the_request_path_imports_the_chunker(self) -> None:
+        """Chunking is the worker's (ADR-0009): no route or API service reaches it."""
+        request_path = [
+            path
+            for directory in (ROOT / "backend" / "api", ROOT / "backend" / "security")
+            for path in sorted(directory.rglob("*.py"))
+            if "__pycache__" not in path.parts
+        ] + [ROOT / "backend" / "services" / "document_service.py"]
+
+        for path in request_path:
+            imports = self._imports(path)
+            assert "document_processing.chunker" not in imports, path
+            assert "document_processing.sections" not in imports, path
+
+    def test_the_chunker_is_given_pages_and_nothing_else(self) -> None:
+        import inspect
+
+        from document_processing.chunker import SectionAwareChunker
+        from shared.interfaces.chunking import DocumentChunker
+
+        assert list(inspect.signature(DocumentChunker.chunk).parameters) == [
+            "self",
+            "pages",
+        ]
+        assert list(inspect.signature(SectionAwareChunker.chunk).parameters) == [
+            "self",
+            "pages",
+        ]

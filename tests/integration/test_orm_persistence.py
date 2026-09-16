@@ -10,6 +10,7 @@ tests authorisation; it tests structure.
 """
 
 import uuid
+from typing import Any
 
 import pytest
 from sqlalchemy import select, text
@@ -99,6 +100,25 @@ class TestDefaults:
         assert stored.scalar_one() == "admin"
 
 
+def _chunk_row(
+    document_id: Any, index: int = 0, content: str = "x", **extra: Any
+) -> DocumentChunkORM:
+    """A chunk row with the provenance M3/S3.4 made mandatory (ADR-0012 §5)."""
+    fields: dict[str, Any] = {
+        "document_id": document_id,
+        "chunk_index": index,
+        "content": content,
+        "section": "1 Introduction",
+        "page_start": 1,
+        "page_end": 1,
+        "token_count": 4,
+        "strategy_version": "section-aware/v1",
+        "tokenizer_id": "regex-word/v1",
+    }
+    fields.update(extra)
+    return DocumentChunkORM(**fields)
+
+
 class TestConstraints:
     async def test_email_must_be_unique(self, db_session: AsyncSession) -> None:
         """The uniqueness ADR-0003 cites as unavailable in Qdrant."""
@@ -125,9 +145,7 @@ class TestConstraints:
     async def test_a_chunk_cannot_reference_a_document_that_does_not_exist(
         self, db_session: AsyncSession
     ) -> None:
-        db_session.add(
-            DocumentChunkORM(document_id=uuid.uuid4(), chunk_index=0, content="x")
-        )
+        db_session.add(_chunk_row(uuid.uuid4()))
 
         with pytest.raises(IntegrityError):
             await db_session.flush()
@@ -143,13 +161,9 @@ class TestConstraints:
         db_session.add(document)
         await db_session.flush()
 
-        db_session.add(
-            DocumentChunkORM(document_id=document.id, chunk_index=0, content="first")
-        )
+        db_session.add(_chunk_row(document.id, content="first"))
         await db_session.flush()
-        db_session.add(
-            DocumentChunkORM(document_id=document.id, chunk_index=0, content="again")
-        )
+        db_session.add(_chunk_row(document.id, content="again"))
 
         with pytest.raises(IntegrityError):
             await db_session.flush()
@@ -167,8 +181,8 @@ class TestConstraints:
 
         db_session.add_all(
             [
-                DocumentChunkORM(document_id=first.id, chunk_index=0, content="a"),
-                DocumentChunkORM(document_id=second.id, chunk_index=0, content="b"),
+                _chunk_row(first.id, content="a"),
+                _chunk_row(second.id, content="b"),
             ]
         )
         await db_session.flush()
@@ -194,11 +208,7 @@ class TestConstraints:
         document = _document(user)
         db_session.add(document)
         await db_session.flush()
-        db_session.add(
-            DocumentChunkORM(
-                document_id=document.id, chunk_index=0, content="x", dimension=0
-            )
-        )
+        db_session.add(_chunk_row(document.id, dimension=0))
 
         with pytest.raises(IntegrityError):
             await db_session.flush()
@@ -257,12 +267,7 @@ class TestOwnershipSemantics:
         document = _document(user)
         db_session.add(document)
         await db_session.flush()
-        db_session.add_all(
-            [
-                DocumentChunkORM(document_id=document.id, chunk_index=i, content="x")
-                for i in range(3)
-            ]
-        )
+        db_session.add_all([_chunk_row(document.id, index=i) for i in range(3)])
         await db_session.flush()
         document_id = document.id
 
@@ -292,9 +297,7 @@ class TestOwnershipSemantics:
         document = _document(user)
         db_session.add(document)
         await db_session.flush()
-        db_session.add(
-            DocumentChunkORM(document_id=document.id, chunk_index=0, content="x")
-        )
+        db_session.add(_chunk_row(document.id))
         await db_session.flush()
 
         document.deleted_at = datetime.now(timezone.utc)
@@ -332,9 +335,7 @@ class TestRelationships:
         document = _document(user)
         db_session.add(document)
         await db_session.flush()
-        chunk = DocumentChunkORM(
-            document_id=document.id, chunk_index=0, content="hello"
-        )
+        chunk = _chunk_row(document.id, content="hello")
         db_session.add(chunk)
         await db_session.flush()
 

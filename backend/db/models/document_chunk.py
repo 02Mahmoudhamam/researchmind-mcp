@@ -5,7 +5,8 @@ makes reconciliation, provenance and targeted re-indexing possible. Qdrant is
 an index and can be rebuilt from here; the reverse is not true.
 
 Chunk *generation* — parsing, section detection, chunking — is Milestone M3.
-This sprint creates the table and nothing writes to it yet.
+M3/S3.4 is the code that writes it, and added the provenance columns ADR-0007 §1
+and ADR-0012 require.
 """
 
 import uuid
@@ -57,6 +58,33 @@ class DocumentChunkORM(Base):
 
     content: Mapped[str] = mapped_column(Text, nullable=False)
 
+    # --- Provenance (M3/S3.4; ADR-0007 §1, ADR-0012 §5) ---------------------
+    #
+    # What a chunk can answer about itself: which section it came from, which
+    # pages it covers, how many tokens it holds, and which strategy and
+    # tokenizer produced it. All NOT NULL but `section`: every chunk derives
+    # from pages, and "unknown" would be a value no query could trust. A
+    # heading is not always found, so `section` is genuinely optional.
+
+    section: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Inclusive, 1-based, as `document_pages.page_number` and as a reader
+    # numbers pages. A chunk inside one page has page_start == page_end.
+    page_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    page_end: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # Counted with `tokenizer_id`, and meaningless without it.
+    token_count: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # ADR-005 §7 asks for the chunking strategy to be recorded so a change is
+    # detectable and a targeted re-index is possible; ADR-0012 puts it on the
+    # chunk, beside the embedding columns and for the same reason — a partially
+    # re-chunked document is exactly the state that needs finding. The
+    # tokenizer is recorded with it, because the token counts and therefore the
+    # boundaries depend on it, and M4 replaces it.
+    strategy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    tokenizer_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
     # `metadata` is reserved on a declarative class; see DocumentORM.
     chunk_metadata: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSONB, nullable=False, server_default="{}"
@@ -86,6 +114,11 @@ class DocumentChunkORM(Base):
         # keys automatically, and this covers it.
         UniqueConstraint("document_id", "chunk_index"),
         CheckConstraint("chunk_index >= 0", name="chunk_index_non_negative"),
+        # Pages are numbered from 1 and a chunk cannot end before it starts.
+        CheckConstraint("page_start >= 1", name="page_start_positive"),
+        CheckConstraint("page_end >= page_start", name="page_end_not_before_start"),
+        # A chunk of no tokens is not a smaller chunk, it is an empty one.
+        CheckConstraint("token_count > 0", name="token_count_positive"),
         # A dimension of zero or less is not a smaller embedding, it is a bug.
         CheckConstraint(
             "dimension IS NULL OR dimension > 0", name="dimension_positive"

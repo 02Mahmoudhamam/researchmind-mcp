@@ -45,7 +45,9 @@ from backend.services.ingestion_service import (
     TransientIngestionError,
 )
 from backend.storage import LocalStorage
+from document_processing.chunker import SectionAwareChunker
 from document_processing.pdf_parser import PyMuPDFTextExtractor
+from document_processing.tokenization import RegexTokenizer
 from shared.interfaces.storage import StorageError, document_storage_key
 from shared.models.document import DocumentStatus
 from shared.models.ingestion import (
@@ -187,6 +189,7 @@ def _service(session: Any, storage: Any) -> IngestionService:
         session,
         storage,
         extractor=PyMuPDFTextExtractor(timeout_seconds=60, max_concurrency=8),
+        chunker=SectionAwareChunker(RegexTokenizer(), chunk_size=400, chunk_overlap=60),
         max_pages=get_settings().MAX_PDF_PAGES,
     )
 
@@ -252,11 +255,11 @@ class TestASoundDocumentIsVerified:
 
         result = await _ingest(spy, job)
 
-        assert result.outcome is IngestionOutcome.PARSED
+        assert result.outcome is IngestionOutcome.CHUNKED
         assert result.document_id == job.document_id
         assert result.reason is None
         row = await _row(committing_session, job.document_id)
-        assert (row["status"], row["failure_reason"]) == ("parsed", None)
+        assert (row["status"], row["failure_reason"]) == ("chunked", None)
         assert spy.gets == 1
 
     async def test_the_document_is_processing_while_it_is_being_read(
@@ -589,7 +592,7 @@ class TestTransientFailures:
 
         result = await _ingest(storage, job)
 
-        assert result.outcome is IngestionOutcome.PARSED
+        assert result.outcome is IngestionOutcome.CHUNKED
 
 
 # =============================================================================
@@ -602,11 +605,11 @@ class TestDeliveryIsIdempotent:
         ("status", "reason", "outcome"),
         [
             ("processing", None, IngestionOutcome.SKIPPED_IN_PROGRESS),
-            ("parsed", None, IngestionOutcome.SKIPPED_PARSED),
+            ("chunked", None, IngestionOutcome.SKIPPED_CHUNKED),
             ("ready", None, IngestionOutcome.SKIPPED_TERMINAL),
             ("failed", "storage_missing", IngestionOutcome.SKIPPED_TERMINAL),
         ],
-        ids=["processing", "parsed", "ready", "failed"],
+        ids=["processing", "chunked", "ready", "failed"],
     )
     async def test_a_document_not_pending_is_left_exactly_as_it_is(
         self,
@@ -643,10 +646,10 @@ class TestDeliveryIsIdempotent:
         second = await _ingest(storage, job)
 
         assert (first.outcome, second.outcome) == (
-            IngestionOutcome.PARSED,
-            IngestionOutcome.SKIPPED_PARSED,
+            IngestionOutcome.CHUNKED,
+            IngestionOutcome.SKIPPED_CHUNKED,
         )
-        assert (await _row(committing_session, job.document_id))["status"] == "parsed"
+        assert (await _row(committing_session, job.document_id))["status"] == "chunked"
 
     async def test_a_failed_document_redelivered_keeps_its_reason(
         self, committing_session: Any, storage: LocalStorage, tmp_path: Path
@@ -681,13 +684,13 @@ class TestDeliveryIsIdempotent:
 
         assert slow.most_in_flight == 1
         outcomes = [r.outcome for r in results]
-        assert outcomes.count(IngestionOutcome.PARSED) == 1
+        assert outcomes.count(IngestionOutcome.CHUNKED) == 1
         assert set(outcomes) <= {
-            IngestionOutcome.PARSED,
+            IngestionOutcome.CHUNKED,
             IngestionOutcome.SKIPPED_IN_PROGRESS,
-            IngestionOutcome.SKIPPED_PARSED,
+            IngestionOutcome.SKIPPED_CHUNKED,
         }
-        assert (await _row(committing_session, job.document_id))["status"] == "parsed"
+        assert (await _row(committing_session, job.document_id))["status"] == "chunked"
 
     async def test_an_interrupted_delivery_puts_the_document_back(
         self, committing_session: Any, storage: LocalStorage
@@ -715,7 +718,7 @@ class TestDeliveryIsIdempotent:
 
         row = await _row(committing_session, job.document_id)
         assert (row["status"], row["failure_reason"]) == ("pending", None)
-        assert (await _ingest(storage, job)).outcome is IngestionOutcome.PARSED
+        assert (await _ingest(storage, job)).outcome is IngestionOutcome.CHUNKED
 
     async def test_a_claim_taken_by_the_reaper_is_not_overwritten(
         self, committing_session: Any, storage: LocalStorage, tmp_path: Path
@@ -1056,7 +1059,9 @@ class TestTheWorkersQueriesCarryTheOwner:
             and "storage_key" in s
         ]
         writes = [s for s in statements if s.lstrip().startswith("UPDATE documents")]
-        assert reads and len(writes) == 2, (reads, writes)
+        # Two stages, two claims and two advances: pending -> processing ->
+        # parsed -> processing -> chunked (M3/S3.4).
+        assert reads and len(writes) == 4, (reads, writes)
         for statement in reads + writes:
             assert "documents.user_id = " in statement, statement
             assert "documents.deleted_at IS NULL" in statement, statement

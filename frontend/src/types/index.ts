@@ -1,8 +1,15 @@
 /** Core domain types mirroring the backend models. */
 
 // Mirrors shared/models/document.py. "failed" replaced "error" in M3/S3.2 (ADR-0009);
-// "parsed" (text extracted, not yet searchable) arrived in M3/S3.3.
-export type DocumentStatus = "pending" | "processing" | "parsed" | "ready" | "failed";
+// "parsed" (text extracted) arrived in M3/S3.3 and "chunked" (split into
+// section-aware chunks, still not searchable) in M3/S3.4.
+export type DocumentStatus =
+  | "pending"
+  | "processing"
+  | "parsed"
+  | "chunked"
+  | "ready"
+  | "failed";
 export type UserRole = "admin" | "researcher" | "viewer";
 
 export interface Document {

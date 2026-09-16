@@ -267,7 +267,7 @@ class TestUploadThroughTheWorker:
         worker = await _run_worker()
 
         assert (worker.jobs_complete, worker.jobs_failed) == (1, 0)
-        assert await _status(document_id) == ("parsed", None)
+        assert await _status(document_id) == ("chunked", None)
         assert await _queued_job_ids() == []
 
     async def test_a_tampered_upload_fails_in_the_worker(
@@ -344,7 +344,7 @@ class TestTheWorkerTask:
 
         assert worker.jobs_retried == 2
         assert flaky.gets == 3
-        assert await _status(job.document_id) == ("parsed", None)
+        assert await _status(job.document_id) == ("chunked", None)
 
     async def test_retries_end_in_a_terminal_failure_not_an_endless_loop(
         self, committing_session: Any, storage_root: Path
@@ -414,6 +414,67 @@ class TestTheWorkerTask:
 
         assert reaped == []
         assert await _status(job.document_id) == ("processing", None)
+
+
+class TestTheChunkStage:
+    """M3/S3.4 through a real ARQ worker: parse and chunk in one delivery."""
+
+    async def test_an_upload_is_parsed_and_chunked_by_one_job(
+        self, committing_session: Any, storage_root: Path
+    ) -> None:
+        from tests.pdfs import make_paper_pdf
+
+        job = await _uploaded_job(committing_session, storage_root, make_paper_pdf())
+        await ArqIngestionQueue(redis_settings_from(get_settings())).enqueue(job)
+
+        worker = await _run_worker()
+
+        assert (worker.jobs_complete, worker.jobs_failed) == (1, 0)
+        assert await _status(job.document_id) == ("chunked", None)
+        async with get_sessionmaker()() as session:
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT count(*), max(page_end) FROM document_chunks"
+                        " WHERE document_id = :id"
+                    ),
+                    {"id": uuid.UUID(job.document_id)},
+                )
+            ).one()
+        assert rows[0] > 1, "a paper is more than one chunk"
+        assert rows[1] >= 2, "provenance survives the worker"
+
+    async def test_a_second_delivery_changes_nothing(
+        self, committing_session: Any, storage_root: Path
+    ) -> None:
+        job = await _uploaded_job(committing_session, storage_root)
+        await ArqIngestionQueue(redis_settings_from(get_settings())).enqueue(job)
+        await _run_worker()
+        async with get_sessionmaker()() as session:
+            before = (
+                await session.execute(
+                    text(
+                        "SELECT count(*) FROM document_chunks WHERE document_id = :id"
+                    ),
+                    {"id": uuid.UUID(job.document_id)},
+                )
+            ).scalar_one()
+
+        await ArqIngestionQueue(redis_settings_from(get_settings())).enqueue(job)
+        worker = await _run_worker()
+
+        assert worker.jobs_failed == 0
+        assert await _status(job.document_id) == ("chunked", None)
+        async with get_sessionmaker()() as session:
+            after = (
+                await session.execute(
+                    text(
+                        "SELECT count(*) FROM document_chunks WHERE document_id = :id"
+                    ),
+                    {"id": uuid.UUID(job.document_id)},
+                )
+            ).scalar_one()
+        assert after == before
 
 
 class TestTheWorkerEntrypoint:

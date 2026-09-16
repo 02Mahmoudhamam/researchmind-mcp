@@ -21,6 +21,7 @@ supersedes the old one, so the reasoning history stays intact.
 | [0009](0009-arq-for-asynchronous-ingestion.md) | ARQ over Redis for asynchronous ingestion | Accepted |
 | [0010](0010-per-owner-idempotent-upload.md) | Per-owner idempotent upload over content-addressed storage | Proposed |
 | [0011](0011-pdf-text-extraction-stage.md) | PDF text extraction: a `parsed` stage, per-page storage, a killable parser | Proposed |
+| [0012](0012-section-aware-chunking.md) | Section-aware chunking: a `chunked` stage, a tokenizer seam, and chunk provenance | Accepted |
 
 ## Statuses
 

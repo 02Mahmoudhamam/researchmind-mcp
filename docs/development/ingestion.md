@@ -1,9 +1,9 @@
 # Ingestion worker
 
-M3/S3.2, extended by M3/S3.3. What happens to an uploaded document after
-`POST /api/v1/documents/upload` has answered 202 — and, as importantly, what does
-not happen yet. The extraction stage itself — format, reading order, failures,
-time budget — is [pdf-extraction.md](pdf-extraction.md).
+M3/S3.2, extended by M3/S3.3 and M3/S3.4. What happens to an uploaded document
+after `POST /api/v1/documents/upload` has answered 202 — and, as importantly,
+what does not happen yet. The stages themselves are
+[pdf-extraction.md](pdf-extraction.md) and [chunking.md](chunking.md).
 
 ```text
 upload request                                  worker process
@@ -21,8 +21,10 @@ validate → store → INSERT … COMMIT
                                                    │ Storage.get(storage_key)
                                                    │ SHA-256 verified
                                                    │ PdfTextExtractor (S3.3)
+                                                   │ pages + `parsed` committed
+                                                   │ DocumentChunker  (S3.4)
                                                    ▼
-                                                 pages + `parsed` committed,
+                                                 chunks + `chunked` committed,
                                                  then returned
 
                                      cron, every minute: recover_pending_documents
@@ -40,6 +42,8 @@ ADR-0009 is the decision. The code:
 | [backend/db/repositories/document.py](../../backend/db/repositories/document.py) | The owner-scoped read, the compare-and-set transition, the reaper's update, the recovery sweep's read |
 | [backend/db/repositories/document_page.py](../../backend/db/repositories/document_page.py) | Extracted pages, owner-scoped through the document (S3.3) |
 | [document_processing/pdf_parser.py](../../document_processing/pdf_parser.py) | `PyMuPDFTextExtractor` — see [pdf-extraction.md](pdf-extraction.md) |
+| [document_processing/chunker.py](../../document_processing/chunker.py) | `SectionAwareChunker` — see [chunking.md](chunking.md) |
+| [backend/db/repositories/document_chunk.py](../../backend/db/repositories/document_chunk.py) | Chunks, owner-scoped through the document (S3.4) |
 
 ## Running it
 
@@ -63,14 +67,15 @@ persisted — and, since S3.3, a `parsed` stage between (ADR-0011).
 | `pending` | Recorded; no stage has completed, none is running | Upload. The worker, releasing a claim to retry |
 | `processing` | A delivery holds the claim | The worker's claim |
 | `parsed` | Text extracted and stored; not chunked, embedded or searchable | The worker, with the pages, in one transaction (S3.3) |
+| `chunked` | Split into section-aware chunks and stored; still not searchable | The worker, with the chunks, in one transaction (S3.4) |
 | `ready` | Processed and searchable | **Nothing yet** |
 | `failed` | Can never be processed; `failure_reason` says why | The worker, the reaper |
 
 **Nothing sets `ready`.** `ready` means searchable — the M3 definition of done
-is "poll until ready, then search", and nothing chunks or embeds yet. In S3.2 a
-verified document was released back to `pending`; since S3.3 it is parsed, and
-`parsed` says exactly that much. A test (`test_it_never_sets_ready`) and a
-mutation hold this.
+is "poll until ready, then search", and nothing embeds yet. S3.2 released a
+verified document back to `pending`, S3.3 parses it, S3.4 chunks it, and each
+status says exactly that much and no more. A test
+(`test_it_never_sets_ready`) and mutations hold this.
 
 **`failed` replaces `error`** (migration `0004`). ADR-0009 names the terminal
 state `FAILED`; S3.1 had left `DocumentStatus.ERROR` for the first sprint that set
@@ -97,8 +102,9 @@ PostgreSQL rather than by convention.
 4. **Check the job against the row** — owner, content hash, storage key, MIME
    type. A disagreement *rejects the job* and leaves the document untouched: it
    is the job that is wrong, not the owner's document.
-5. **Check the state.** `processing` → another delivery holds it; `parsed` →
-   this job's work is done; `ready` or `failed` → terminal. Nothing is done.
+5. **Check the state.** `processing` → another delivery holds it; `chunked` →
+   this job's work is done; `ready` or `failed` → terminal. Nothing is done. A
+   `pending` document is parsed and then chunked; a `parsed` one is chunked.
 6. **Claim**: `pending → processing`, a conditional `UPDATE`, committed. The
    claim comes before the bytes are read, so concurrent deliveries never read,
    hash or parse the same document.
@@ -107,8 +113,14 @@ PostgreSQL rather than by convention.
    (computed in a thread) equals the recorded hash.
 8. **Extract** (S3.3) — only now, and only from those verified bytes.
 9. **Store and advance**: `processing → parsed` and the pages, in one
-   transaction, committed. Only then does the task return — ARQ never records
-   success for state that is not durable.
+   transaction, committed.
+10. **Chunk** (S3.4): claim `parsed → processing`, read the pages back
+    owner-scoped, chunk them, and store the chunks with `processing → chunked`
+    in one transaction. Only then does the task return — ARQ never records
+    success for state that is not durable.
+
+Each stage is its own claim, transaction and retry, and releases its claim back
+to the status it started from, so a retry repeats the stage that failed.
 
 ## Outcomes
 
@@ -116,11 +128,12 @@ Returned by the task (and so visible in worker logs), one per delivery:
 
 | Outcome | When | Document afterwards |
 |---|---|---|
-| `parsed` | Verified, extracted, stored (S3.3; replaced S3.2's `verified`) | `parsed` |
+| `parsed` | Verified, extracted, pages stored (S3.3) — returned only when the delivery stops there | `parsed` |
+| `chunked` | Chunked and stored (S3.4) | `chunked` |
 | `failed` | Permanent failure, or transient on the last attempt | `failed` + reason |
 | `rejected` | Payload invalid, or job disagrees with the database | unchanged |
 | `skipped_in_progress` | Another delivery holds the claim, or won the race for it | unchanged |
-| `skipped_parsed` | Already `parsed` | unchanged |
+| `skipped_chunked` | Already `chunked` | unchanged |
 | `skipped_terminal` | Already `ready` or `failed` | unchanged |
 | `claim_lost` | The claim was taken away mid-run (by the reaper) | whatever replaced it — never overwritten |
 
@@ -138,6 +151,8 @@ trace or infrastructure detail is ever persisted.
 | `processing_failure` | on the last attempt | yes — any other error while reading, extracting or storing; also recorded when a final attempt gives up on an unclassified error |
 | `pdf_open_failed`, `pdf_encrypted`, `page_limit_exceeded`, `pdf_parse_failed`, `pdf_timeout`, `page_count_mismatch`, `no_extractable_text` | yes — see [pdf-extraction.md](pdf-extraction.md#failures) | **never** |
 | `parser_unavailable` | on the last attempt | yes — the extraction process died |
+| `no_extracted_pages`, `no_chunks_produced` | yes — see [chunking.md](chunking.md#failures) | **never** |
+| `chunking_failure` | on the last attempt | yes — the chunker or the write failed |
 | `stale_processing` | yes — by the reaper | n/a |
 | `invalid_job`, `document_not_found`, `ownership_mismatch`, `storage_key_mismatch`, `mime_type_mismatch` | **no** — the job is rejected, the document untouched | **never** |
 | `unknown` | only on rows migrated from `error` | n/a |
@@ -201,10 +216,12 @@ Nothing looked at those documents again.
 
 - `recover_pending_documents`, a cron job every minute on the half-minute and
   **once at worker startup**, `unique=True`.
-- Selects live `pending` documents **with stored content** (storage key, hash
-  and type all set), oldest `updated_at` first, at most 500 a pass
-  (`RECOVERY_BATCH_SIZE`). Never `processing` (the reaper's), `parsed`, `ready`
-  or `failed`, never deleted, never a row from before upload existed.
+- Selects live documents **with stored content** (storage key, hash and type
+  all set) in a status a stage can still advance — `pending` and, since S3.4,
+  `parsed` — oldest `updated_at` first, at most 500 a pass
+  (`RECOVERY_BATCH_SIZE`). Never `processing`: that claim is the reaper's, and
+  the repository refuses to be asked for it. Never `chunked`, `ready` or
+  `failed`, never deleted, never a row from before upload existed.
 - Builds each job **from the row**: its own `user_id`, storage key, hash and
   type. There is no request to take anything from. A row whose storage key is
   not what its owner and hash derive to is **skipped and logged**
@@ -312,9 +329,10 @@ neither.
 
 ## Not done
 
-- **Nothing takes a `parsed` document further.** Chunking is the next stage; it
-  must claim `parsed → processing`, release back to `parsed` on a transient
-  failure, and extend the recovery sweep to `parsed` documents with no job.
+- **Nothing takes a `chunked` document further.** Embedding is M4's: it must
+  claim `chunked → processing`, release back to `chunked` on a transient
+  failure, extend the recovery sweep to `chunked` documents with no job, and
+  only then set `ready`.
 - ~~A job cancelled by timeout is not retried~~ and ~~verified documents are
   never picked up again~~ — **closed in S3.3** by the recovery sweep. Every
   upload verified by S3.2 is `pending` and is swept up and parsed.

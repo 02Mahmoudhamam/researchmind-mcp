@@ -26,7 +26,7 @@ in operator logs), `fail_stale_processing` (the reaper) and
 maintenance across every owner by definition.
 """
 
-from typing import Any, cast
+from typing import Any, Sequence, cast
 
 from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -298,6 +298,7 @@ class DocumentRepository:
         expected: DocumentStatus,
         new: DocumentStatus,
         failure_reason: str | None = None,
+        chunk_count: int | None = None,
     ) -> bool:
         """Move this user's live document from `expected` to `new`. Atomic.
 
@@ -311,6 +312,10 @@ class DocumentRepository:
         `failure_reason` is written as given — including None, which clears it —
         so a document can never keep the reason for a failure it has left. The
         CHECK constraint `failure_reason_iff_failed` refuses a mismatch.
+
+        `chunk_count` is written only when given, in the same statement as the
+        status: a document becomes `chunked` and learns how many chunks it has
+        together, or neither happens (M3/S3.4).
 
         `updated_at` is set from the database clock: it is what the stale-job
         reaper measures a claim's age by.
@@ -330,7 +335,12 @@ class DocumentRepository:
                 DocumentORM.deleted_at.is_(None),
                 DocumentORM.status == expected,
             )
-            .values(status=new, failure_reason=failure_reason, updated_at=func.now())
+            .values(
+                status=new,
+                failure_reason=failure_reason,
+                updated_at=func.now(),
+                **({} if chunk_count is None else {"chunk_count": chunk_count}),
+            )
         )
         return bool(cast("CursorResult[Any]", result).rowcount)
 
@@ -367,8 +377,10 @@ class DocumentRepository:
         )
         return [str(document_id) for document_id in result.scalars().all()]
 
-    async def list_pending_for_recovery(self, *, limit: int) -> list[IngestionTarget]:
-        """Live `pending` documents that have stored content, oldest first.
+    async def list_for_recovery(
+        self, *, statuses: Sequence[DocumentStatus], limit: int
+    ) -> list[IngestionTarget]:
+        """Live documents in `statuses` that have stored content, oldest first.
 
         The recovery sweep's read (M3/S3.3), and the third documented exception
         to the owner rule: finding documents no job will pick up is maintenance
@@ -378,9 +390,13 @@ class DocumentRepository:
         hash, type — never content, never a filename.
 
         Rows without stored content (created before upload existed) are not
-        candidates: there is nothing to ingest. `pending` only — `processing` is
-        the reaper's, and every other status is past what a job can do.
+        candidates: there is nothing to ingest. The caller names the statuses a
+        job can still advance — `pending` and, since M3/S3.4, `parsed`.
+        `processing` is never one of them: that is the reaper's, and a claim
+        another worker holds must not be handed a second job.
         """
+        if DocumentStatus.PROCESSING in statuses:
+            raise ValueError("a claimed document is the reaper's, not the sweep's")
         result = await self._session.execute(
             select(
                 DocumentORM.id,
@@ -392,7 +408,7 @@ class DocumentRepository:
                 DocumentORM.page_count,
             )
             .where(
-                DocumentORM.status == DocumentStatus.PENDING,
+                DocumentORM.status.in_(list(statuses)),
                 DocumentORM.deleted_at.is_(None),
                 DocumentORM.storage_key.is_not(None),
                 DocumentORM.content_hash.is_not(None),

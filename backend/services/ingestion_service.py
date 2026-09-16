@@ -27,9 +27,17 @@ The order of a delivery, and why each step is where it is:
    bounds the time a hostile PDF can take.
 7. **Store and advance**: the pages and `processing → parsed`, in one
    transaction. A document is never `parsed` without its pages, and never has
-   pages while it is not. `ready` means searchable (ADR-0009, the M3 definition
-   of done), and nothing is searchable until chunking — so `parsed`, not
-   `ready`.
+   pages while it is not.
+8. **Chunk** (M3/S3.4): claim `parsed → processing`, read the pages back
+   owner-scoped, split them into section-aware chunks, and store those with
+   `processing → chunked` in one transaction. `ready` means searchable
+   (ADR-0009, the M3 definition of done) and chunks are not searchable until
+   M4 embeds them — so `chunked`, not `ready`.
+
+A delivery runs every stage the document is ready for: an upload is parsed and
+then chunked by the same job, and a job that finds a `parsed` document chunks
+it. Each stage is its own claim, its own transaction and its own retry, so a
+failure in one never undoes the other.
 
 Failures after the claim move `processing → failed`, which is the lifecycle
 ADR-0009 §4 draws: a document fails *while being processed*, never straight out
@@ -44,13 +52,20 @@ documents that no job will pick up (S3.3).
 """
 
 import asyncio
+from dataclasses import dataclass
+from typing import Sequence
 
 import anyio.to_thread
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.db.repositories import DocumentPageRepository, DocumentRepository
+from backend.db.repositories import (
+    DocumentChunkRepository,
+    DocumentPageRepository,
+    DocumentRepository,
+)
 from document_processing.validation import PDF_MIME_TYPE, content_hash
+from shared.interfaces.chunking import DocumentChunker
 from shared.interfaces.ingestion import IngestionQueue
 from shared.interfaces.pdf_extraction import PdfExtractionError, PdfTextExtractor
 from shared.interfaces.storage import (
@@ -60,7 +75,8 @@ from shared.interfaces.storage import (
     document_storage_key,
 )
 from shared.models.document import DocumentStatus
-from shared.models.extraction import ExtractedText
+from shared.models.chunking import ChunkingResult
+from shared.models.extraction import ExtractedPage, ExtractedText
 from shared.models.ingestion import (
     IngestionJob,
     IngestionOutcome,
@@ -72,6 +88,12 @@ from shared.models.ingestion import (
 from shared.utils.logger import get_logger
 
 _log = get_logger(__name__)
+
+# The statuses a delivery can still advance: where the recovery sweep looks, and
+# what a final attempt claims before recording that it gave up. `parsed` joined
+# `pending` in M3/S3.4 — a document whose job died between parsing and chunking
+# is as stranded as one whose job never reached Redis.
+RECOVERABLE_STATUSES = (DocumentStatus.PENDING, DocumentStatus.PARSED)
 
 
 class TransientIngestionError(Exception):
@@ -88,6 +110,21 @@ class TransientIngestionError(Exception):
         self.reason = reason
 
 
+@dataclass(frozen=True)
+class _Stage:
+    """One step of the pipeline: what it is called, and where it starts from."""
+
+    name: str
+    starts_at: DocumentStatus
+
+
+# Parsing takes a `pending` document; chunking takes a `parsed` one. A stage
+# releases its claim back to where it started, so a retry begins where this
+# attempt did (M3/S3.4).
+_PARSE = _Stage("parse", DocumentStatus.PENDING)
+_CHUNK = _Stage("chunk", DocumentStatus.PARSED)
+
+
 class IngestionService:
     """Runs one delivery of an ingestion job against the database and storage."""
 
@@ -97,11 +134,13 @@ class IngestionService:
         storage: Storage,
         *,
         extractor: PdfTextExtractor,
+        chunker: DocumentChunker,
         max_pages: int,
     ) -> None:
         """
         :param extractor: reads text from verified PDF bytes, within its own
             time budget.
+        :param chunker: splits a parsed document's pages into chunks.
         :param max_pages: the most pages a document may have — the upload cap,
             enforced again here because stored bytes and old rows predate any
             later change to it.
@@ -109,9 +148,11 @@ class IngestionService:
         self._session = session
         self._storage = storage
         self._extractor = extractor
+        self._chunker = chunker
         self._max_pages = max_pages
         self._documents = DocumentRepository(session)
         self._pages = DocumentPageRepository(session)
+        self._chunks = DocumentChunkRepository(session)
 
     async def ingest(
         self, job: IngestionJob, *, final_attempt: bool
@@ -159,30 +200,65 @@ class IngestionService:
         if target.status is DocumentStatus.PROCESSING:
             await self._session.rollback()
             return self._skipped(job, IngestionOutcome.SKIPPED_IN_PROGRESS)
-        if target.status is DocumentStatus.PARSED:
+        if target.status is DocumentStatus.CHUNKED:
             await self._session.rollback()
-            return self._skipped(job, IngestionOutcome.SKIPPED_PARSED)
+            return self._skipped(job, IngestionOutcome.SKIPPED_CHUNKED)
         if target.status in (DocumentStatus.READY, DocumentStatus.FAILED):
             await self._session.rollback()
             return self._skipped(job, IngestionOutcome.SKIPPED_TERMINAL)
 
+        if target.status is DocumentStatus.PENDING:
+            parsed = await self._run(
+                job,
+                target,
+                stage=_PARSE,
+                final_attempt=final_attempt,
+            )
+            if parsed.outcome is not IngestionOutcome.PARSED:
+                return parsed
+            # Parsed by this delivery, so the next stage is this delivery's too:
+            # waiting for the sweep to hand the document back would be a minute
+            # of latency for work already in hand.
+        return await self._run(job, target, stage=_CHUNK, final_attempt=final_attempt)
+
+    async def _run(
+        self,
+        job: IngestionJob,
+        target: IngestionTarget,
+        *,
+        stage: "_Stage",
+        final_attempt: bool,
+    ) -> IngestionResult:
+        """Claim the document for one stage, run it, and release or advance.
+
+        The claim is a compare-and-set from the status this stage starts at, so
+        only one delivery runs a stage, and a document that has moved on is
+        skipped rather than reprocessed.
+        """
         if not await self._transition(
-            job, expected=DocumentStatus.PENDING, new=DocumentStatus.PROCESSING
+            job, expected=stage.starts_at, new=DocumentStatus.PROCESSING
         ):
             # Lost the race to another delivery, or the document moved on.
             return self._skipped(job, IngestionOutcome.SKIPPED_IN_PROGRESS)
         _log.info(
-            "ingestion.claimed", document_id=job.document_id, owner_id=job.owner_id
+            "ingestion.claimed",
+            document_id=job.document_id,
+            owner_id=job.owner_id,
+            stage=stage.name,
         )
 
         try:
-            return await self._process_claimed(job, target, final_attempt=final_attempt)
+            if stage is _PARSE:
+                return await self._process_claimed(
+                    job, target, final_attempt=final_attempt
+                )
+            return await self._chunk_claimed(job, final_attempt=final_attempt)
         except asyncio.CancelledError:
             # The job was cancelled — a timeout or a worker shutting down. Put the
             # document back so the next delivery can take it, rather than leaving
             # it for the reaper to fail. Shielded, because this coroutine is
             # already being cancelled.
-            await asyncio.shield(self._release_after_interruption(job))
+            await asyncio.shield(self._release_after_interruption(job, stage.starts_at))
             raise
 
     async def _process_claimed(
@@ -202,11 +278,17 @@ class IngestionService:
             return await self._fail(job, IngestionReason.STORAGE_MISSING)
         except StorageError:
             return await self._transient(
-                job, IngestionReason.STORAGE_READ_FAILURE, final_attempt=final_attempt
+                job,
+                IngestionReason.STORAGE_READ_FAILURE,
+                final_attempt=final_attempt,
+                release_to=DocumentStatus.PENDING,
             )
         except Exception:
             return await self._transient(
-                job, IngestionReason.PROCESSING_FAILURE, final_attempt=final_attempt
+                job,
+                IngestionReason.PROCESSING_FAILURE,
+                final_attempt=final_attempt,
+                release_to=DocumentStatus.PENDING,
             )
 
         # SHA-256 of a large file is CPU work; keep it off the event loop.
@@ -225,11 +307,19 @@ class IngestionService:
         except PdfExtractionError as exc:
             reason = IngestionReason(exc.reason.value)
             if exc.transient:
-                return await self._transient(job, reason, final_attempt=final_attempt)
+                return await self._transient(
+                    job,
+                    reason,
+                    final_attempt=final_attempt,
+                    release_to=DocumentStatus.PENDING,
+                )
             return await self._fail(job, reason)
         except Exception:
             return await self._transient(
-                job, IngestionReason.PROCESSING_FAILURE, final_attempt=final_attempt
+                job,
+                IngestionReason.PROCESSING_FAILURE,
+                final_attempt=final_attempt,
+                release_to=DocumentStatus.PENDING,
             )
 
         if target.page_count is not None and extracted.page_count != target.page_count:
@@ -248,7 +338,10 @@ class IngestionService:
             # Rolled back: no pages and no `parsed`. The claim is released and
             # the delivery retried, or failed on its last attempt.
             return await self._transient(
-                job, IngestionReason.PROCESSING_FAILURE, final_attempt=final_attempt
+                job,
+                IngestionReason.PROCESSING_FAILURE,
+                final_attempt=final_attempt,
+                release_to=DocumentStatus.PENDING,
             )
         if not stored:
             return self._claim_lost(job)
@@ -294,6 +387,95 @@ class IngestionService:
             await self._session.rollback()
             raise
 
+    async def _chunk_claimed(
+        self, job: IngestionJob, *, final_attempt: bool
+    ) -> IngestionResult:
+        """Everything done while holding the chunking claim (M3/S3.4)."""
+        try:
+            pages = await self._pages.list_for_document(job.document_id, job.owner_id)
+        finally:
+            await self._session.rollback()
+        if not pages:
+            # `parsed` says its pages were stored; they are not there now.
+            # Nothing this stage can do will bring them back.
+            return await self._fail(job, IngestionReason.NO_EXTRACTED_PAGES)
+
+        try:
+            # Pure Python over the whole document's text: short, but not the
+            # event loop's work (the same reason hashing is offloaded).
+            chunking = await anyio.to_thread.run_sync(self._chunk_pages, pages)
+        except Exception:
+            return await self._transient(
+                job,
+                IngestionReason.CHUNKING_FAILURE,
+                final_attempt=final_attempt,
+                release_to=DocumentStatus.PARSED,
+            )
+
+        if not chunking.chunks:
+            # Pages with no text a chunk could be made of. A `chunked` document
+            # with nothing in it would claim work that did not happen.
+            return await self._fail(job, IngestionReason.NO_CHUNKS_PRODUCED)
+
+        try:
+            stored = await self._store_chunks(job, chunking)
+        except Exception:
+            # Rolled back: no chunks, and not `chunked`.
+            return await self._transient(
+                job,
+                IngestionReason.CHUNKING_FAILURE,
+                final_attempt=final_attempt,
+                release_to=DocumentStatus.PARSED,
+            )
+        if not stored:
+            return self._claim_lost(job)
+        _log.info(
+            "ingestion.chunked",
+            document_id=job.document_id,
+            owner_id=job.owner_id,
+            chunk_count=len(chunking.chunks),
+            page_count=len(pages),
+            strategy_version=chunking.strategy_version,
+            tokenizer_id=chunking.tokenizer_id,
+            status=DocumentStatus.CHUNKED.value,
+        )
+        return IngestionResult(
+            outcome=IngestionOutcome.CHUNKED, document_id=job.document_id
+        )
+
+    def _chunk_pages(self, pages: Sequence[ExtractedPage]) -> ChunkingResult:
+        return self._chunker.chunk(pages)
+
+    async def _store_chunks(self, job: IngestionJob, chunking: ChunkingResult) -> bool:
+        """The chunks and `processing → chunked`: one transaction, both or neither.
+
+        The status moves first, as a compare-and-set that also locks the row and
+        records `chunk_count`; the chunks are written under that lock; then one
+        commit. A claim lost to the reaper matches nothing, and the transaction
+        is rolled back before a single chunk is written.
+        """
+        try:
+            moved = await self._documents.transition_status_for_user(
+                job.document_id,
+                job.owner_id,
+                expected=DocumentStatus.PROCESSING,
+                new=DocumentStatus.CHUNKED,
+                chunk_count=len(chunking.chunks),
+            )
+            if not moved:
+                await self._session.rollback()
+                return False
+            await self._chunks.add_many(
+                document_id=job.document_id,
+                user_id=job.owner_id,
+                chunking=chunking,
+            )
+            await self._session.commit()
+            return True
+        except Exception:
+            await self._session.rollback()
+            raise
+
     async def reap_stale_processing(self, *, stale_after_seconds: int) -> list[str]:
         """Fail documents whose claim has outlived any possible worker (ADR-0009 §6).
 
@@ -320,13 +502,19 @@ class IngestionService:
     async def recover_pending(
         self, queue: IngestionQueue, *, limit: int
     ) -> RecoveryResult:
-        """Queue a job for every `pending` document that has none (M3/S3.3).
+        """Queue a job for every document a stage could advance but none will.
 
-        A document can be left `pending` with no job to take it further: an ARQ
-        job timeout cancels the delivery, which puts its claim back and is not
+        A document can be left with no job to take it further: an ARQ job
+        timeout cancels the delivery, which puts its claim back and is not
         retried; a job that exhausted its attempts on errors the database could
         not record; a Redis outage between an upload's commit and its enqueue.
         Without this, nothing would ever look at those documents again.
+
+        `pending` (M3/S3.3) and, since M3/S3.4, `parsed`: the two statuses a
+        delivery starts a stage from. Never `processing` — that claim is the
+        reaper's, and a document another worker holds must not be handed a
+        second job — and never `chunked`, `ready` or `failed`, which no stage
+        advances.
 
         The job is built from the row PostgreSQL holds — its own `user_id`,
         storage key, hash and type — never from a request, and it passes the
@@ -337,7 +525,9 @@ class IngestionService:
         :param limit: the most documents one pass considers, oldest first.
         """
         try:
-            candidates = await self._documents.list_pending_for_recovery(limit=limit)
+            candidates = await self._documents.list_for_recovery(
+                statuses=RECOVERABLE_STATUSES, limit=limit
+            )
         finally:
             # A read-only transaction; end it before any network call to Redis.
             await self._session.rollback()
@@ -383,17 +573,23 @@ class IngestionService:
         fresh job with a fresh retry budget — retrying forever, which ADR-0009 §5
         forbids. Recorded as `processing_failure`.
 
-        Still `processing → failed` only: a `pending` document is claimed first.
-        A document in `processing` here is this delivery's own claim — ARQ runs
-        at most one job per document id — or a dead worker's, which the reaper
-        would fail anyway. Returns whether a failure was recorded. Raises if the
-        database cannot be reached, in which case the sweep recovers the
-        document once it can.
+        Still `processing → failed` only: a document that is `pending` or
+        `parsed` is claimed first. A document in `processing` here is this
+        delivery's own claim — ARQ runs at most one job per document id — or a
+        dead worker's, which the reaper would fail anyway. Returns whether a
+        failure was recorded. Raises if the database cannot be reached, in which
+        case the sweep recovers the document once it can.
         """
         reason = IngestionReason.PROCESSING_FAILURE
-        if not await self._transition(
-            job, expected=DocumentStatus.PENDING, new=DocumentStatus.PROCESSING
-        ) and not await self._is_processing(job):
+        claimed = any(
+            [
+                await self._transition(
+                    job, expected=status, new=DocumentStatus.PROCESSING
+                )
+                for status in RECOVERABLE_STATUSES
+            ]
+        )
+        if not claimed and not await self._is_processing(job):
             return False
         if not await self._transition(
             job,
@@ -515,13 +711,23 @@ class IngestionService:
         )
 
     async def _transient(
-        self, job: IngestionJob, reason: IngestionReason, *, final_attempt: bool
+        self,
+        job: IngestionJob,
+        reason: IngestionReason,
+        *,
+        final_attempt: bool,
+        release_to: DocumentStatus,
     ) -> IngestionResult:
-        """Retry later — or, on the last attempt, fail for good."""
+        """Retry later — or, on the last attempt, fail for good.
+
+        :param release_to: the status this stage started from. A parse goes
+            back to `pending`, a chunking to `parsed`, so a retry repeats the
+            stage that failed and not the one that succeeded.
+        """
         if final_attempt:
             return await self._fail(job, reason)
         released = await self._transition(
-            job, expected=DocumentStatus.PROCESSING, new=DocumentStatus.PENDING
+            job, expected=DocumentStatus.PROCESSING, new=release_to
         )
         if not released:
             return self._claim_lost(job)
@@ -533,10 +739,12 @@ class IngestionService:
         )
         raise TransientIngestionError(reason)
 
-    async def _release_after_interruption(self, job: IngestionJob) -> None:
+    async def _release_after_interruption(
+        self, job: IngestionJob, release_to: DocumentStatus
+    ) -> None:
         try:
             await self._transition(
-                job, expected=DocumentStatus.PROCESSING, new=DocumentStatus.PENDING
+                job, expected=DocumentStatus.PROCESSING, new=release_to
             )
             _log.info("ingestion.interrupted", document_id=job.document_id)
         except Exception:

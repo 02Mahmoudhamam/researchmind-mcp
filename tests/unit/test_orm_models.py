@@ -82,6 +82,13 @@ class TestTables:
                     "metadata",
                     "embedding_model_id",
                     "dimension",
+                    # M3/S3.4, ADR-0007 §1 and ADR-0012 §5
+                    "section",
+                    "page_start",
+                    "page_end",
+                    "token_count",
+                    "strategy_version",
+                    "tokenizer_id",
                     "created_at",
                 },
             ),
@@ -269,10 +276,40 @@ class TestDeferredColumns:
         assert getattr(table_column.type, "length", None) == length
         assert table_column.nullable is True
 
-    @pytest.mark.parametrize("column", ["section", "page_start", "page_end"])
-    def test_chunk_section_columns_are_not_here_yet(self, column: str) -> None:
-        """ADR-0007 §1 assigns these to Milestone M3."""
-        assert column not in Base.metadata.tables["document_chunks"].c
+    @pytest.mark.parametrize(
+        ("column", "nullable"),
+        [("section", True), ("page_start", False), ("page_end", False)],
+    )
+    def test_chunk_section_columns_arrived_with_chunking(
+        self, column: str, nullable: bool
+    ) -> None:
+        """ADR-0007 §1 assigned these to Milestone M3; M3/S3.4 is that code.
+
+        This test used to assert their absence. `section` is nullable because
+        a chunk need not sit under a heading; the pages are not, because every
+        chunk comes from pages (ADR-0012 §5).
+        """
+        table_column = Base.metadata.tables["document_chunks"].c[column]
+
+        assert table_column.nullable is nullable
+
+    @pytest.mark.parametrize(
+        ("column", "sql_type", "length"),
+        [
+            ("token_count", Integer, None),
+            ("strategy_version", String, 64),
+            ("tokenizer_id", String, 64),
+        ],
+    )
+    def test_chunks_record_what_produced_them(
+        self, column: str, sql_type: type, length: int | None
+    ) -> None:
+        """ADR-005 §7 and ADR-0012: a re-chunk must be a query, not a guess."""
+        table_column = Base.metadata.tables["document_chunks"].c[column]
+
+        assert isinstance(table_column.type, sql_type)
+        assert getattr(table_column.type, "length", None) == length
+        assert table_column.nullable is False
 
     def test_embedding_vectors_are_not_stored_in_postgresql(self) -> None:
         """Qdrant holds vectors; no ADR asks PostgreSQL to duplicate an index.

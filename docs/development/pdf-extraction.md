@@ -66,10 +66,10 @@ owner and `deleted_at IS NULL` in the SQL, like every other owned read.
 
 ## Status
 
-`pending → processing → parsed`. `parsed` means text extracted and stored, and
-nothing more: not chunked, not embedded, not searchable. `ready` still means
-searchable, and nothing sets it yet. ADR-0011 explains why a status and not
-`ready`.
+`pending → processing → parsed`, and then `processing → chunked` (M3/S3.4).
+`parsed` means text extracted and stored, and nothing more: not chunked, not
+embedded, not searchable. `ready` still means searchable, and nothing sets it
+yet. ADR-0011 explains why a status and not `ready`.
 
 ## Reading order
 
@@ -156,8 +156,8 @@ by pipe.
   OOM killer that picks the worker, the reaper fails the claim.
 - **No OCR**, so scans fail as `no_extractable_text`.
 - **No dehyphenation**: a word broken across lines stays broken.
-- **No section detection, chunking or embeddings** — the next stages, which
-  start from `document_pages`.
+- ~~No section detection or chunking~~ — **done in M3/S3.4**, from
+  `document_pages`; see [chunking.md](chunking.md). Embeddings remain M4's.
 - **PDF metadata** (title, author) is not read. `documents.metadata` is
   untouched.
 - **No extraction version is recorded.** If the ordering or cleaning rules

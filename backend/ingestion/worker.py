@@ -27,7 +27,10 @@ from backend.db.session import get_sessionmaker
 from backend.ingestion.queue import PooledArqIngestionQueue
 from backend.services.ingestion_service import IngestionService, TransientIngestionError
 from backend.storage import LocalStorage
+from document_processing.chunker import SectionAwareChunker
 from document_processing.pdf_parser import PyMuPDFTextExtractor
+from document_processing.tokenization import RegexTokenizer
+from shared.interfaces.chunking import DocumentChunker
 from shared.interfaces.pdf_extraction import PdfTextExtractor
 from shared.interfaces.storage import Storage
 from shared.models.ingestion import (
@@ -81,6 +84,14 @@ async def startup(ctx: dict[str, Any]) -> None:
         max_concurrency=settings.ARQ_MAX_JOBS,
     )
     ctx["extractor"] = extractor
+    # The chunker is stateless and pure; its tokenizer is the provisional one
+    # (ADR-0012 §2), and both are named only here.
+    chunker: DocumentChunker = SectionAwareChunker(
+        RegexTokenizer(),
+        chunk_size=settings.CHUNK_SIZE_TOKENS,
+        chunk_overlap=settings.CHUNK_OVERLAP_TOKENS,
+    )
+    ctx["chunker"] = chunker
     ctx["max_pdf_pages"] = settings.MAX_PDF_PAGES
     ctx["ingest_max_tries"] = settings.INGEST_MAX_TRIES
     ctx["stale_processing_seconds"] = settings.INGEST_STALE_PROCESSING_SECONDS
@@ -93,6 +104,7 @@ def _service(ctx: dict[str, Any], session: AsyncSession) -> IngestionService:
         session,
         ctx["storage"],
         extractor=ctx["extractor"],
+        chunker=ctx["chunker"],
         max_pages=int(ctx["max_pdf_pages"]),
     )
 

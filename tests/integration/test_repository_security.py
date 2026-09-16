@@ -22,7 +22,8 @@ from backend.db.repositories import (
     DocumentRepository,
     UserRepository,
 )
-from shared.models.document import DocumentChunk, DocumentType
+from shared.models.chunking import Chunk, ChunkingResult
+from shared.models.document import DocumentType
 
 pytestmark = [
     pytest.mark.db,
@@ -40,6 +41,12 @@ class Corpus:
         self.bob_document_id = ""
         self.alice_chunk_id = ""
         self.bob_chunk_id = ""
+
+
+def _chunking(*chunks: Chunk) -> ChunkingResult:
+    return ChunkingResult(
+        chunks=chunks, strategy_version="section-aware/v1", tokenizer_id="regex-word/v1"
+    )
 
 
 @pytest.fixture
@@ -62,14 +69,16 @@ async def corpus(db_session: AsyncSession) -> Corpus:
         stored = await chunks.add_many(
             document_id=document.id,
             user_id=user.id,
-            chunks=[
-                DocumentChunk(
-                    id=str(uuid.uuid4()),
-                    document_id=document.id,
-                    content=f"{name}'s confidential text",
+            chunking=_chunking(
+                Chunk(
                     chunk_index=0,
+                    content=f"{name}'s confidential text",
+                    section=None,
+                    page_start=1,
+                    page_end=1,
+                    token_count=3,
                 )
-            ],
+            ),
         )
         setattr(fixture, f"{name}_id", user.id)
         setattr(fixture, f"{name}_document_id", document.id)
@@ -239,14 +248,16 @@ class TestChunkIsolation:
             await repo.add_many(
                 document_id=corpus.bob_document_id,
                 user_id=corpus.alice_id,
-                chunks=[
-                    DocumentChunk(
-                        id=str(uuid.uuid4()),
-                        document_id=corpus.bob_document_id,
-                        content="injected",
+                chunking=_chunking(
+                    Chunk(
                         chunk_index=99,
+                        content="injected",
+                        section=None,
+                        page_start=1,
+                        page_end=1,
+                        token_count=1,
                     )
-                ],
+                ),
             )
 
         assert (
