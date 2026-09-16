@@ -382,6 +382,54 @@ class TestChunkingHappensOnce:
         assert result.outcome is IngestionOutcome.CHUNKED
         assert (await _row(job.document_id))[0] == "chunked"
 
+    async def test_each_stage_commits_its_own_work(
+        self, committing_session: Any, root: Path
+    ) -> None:
+        """A COMMIT falls between the pages and the chunk stage's claim.
+
+        Not "the data is there afterwards" — that would still hold if the parse
+        stage left its pages for the next stage's commit to carry, and a worker
+        dying between the two would then lose them. What is asserted is the
+        transaction boundary itself.
+        """
+        owner = await _owner(committing_session)
+        job = await _upload(committing_session, root, owner)
+        events: list[str] = []
+
+        def on_sql(conn: Any, cursor: Any, statement: str, *args: Any) -> None:
+            head = statement.split(maxsplit=3)
+            table = next(
+                (
+                    t
+                    for t in ("document_pages", "document_chunks", "documents")
+                    if t in statement
+                ),
+                "",
+            )
+            events.append(f"{head[0].upper()} {table}".strip())
+
+        def on_commit(conn: Any) -> None:
+            events.append("COMMIT")
+
+        engine = get_engine().sync_engine
+        event.listen(engine, "before_cursor_execute", on_sql)
+        event.listen(engine, "commit", on_commit)
+        try:
+            await _ingest(root, job)
+        finally:
+            event.remove(engine, "before_cursor_execute", on_sql)
+            event.remove(engine, "commit", on_commit)
+
+        pages_written = events.index("INSERT document_pages")
+        next_claim = next(
+            i
+            for i, e in enumerate(events[pages_written:], start=pages_written)
+            if e == "UPDATE documents"
+        )
+        assert "COMMIT" in events[pages_written:next_claim], events
+        chunks_written = events.index("INSERT document_chunks")
+        assert "COMMIT" in events[chunks_written:], "the chunks are committed too"
+
     async def test_a_chunked_document_is_not_chunked_again(
         self, committing_session: Any, root: Path
     ) -> None:
