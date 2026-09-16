@@ -44,6 +44,10 @@ EXPECTED_CONSTRAINTS = {
     "uq_document_chunks_document_id_chunk_index",
     "ck_document_chunks_chunk_index_non_negative",
     "ck_document_chunks_dimension_positive",
+    # M3/S3.4 (migration 0006)
+    "ck_document_chunks_page_start_positive",
+    "ck_document_chunks_page_end_not_before_start",
+    "ck_document_chunks_token_count_positive",
     # M3/S3.3 (migration 0005)
     "pk_document_pages",
     "fk_document_pages_document_id_documents",
@@ -251,5 +255,5 @@ class TestLifecycle:
         result = alembic("heads")
 
         assert result.returncode == 0, result.stderr
-        assert "0005" in result.stdout
+        assert "0006" in result.stdout
         assert result.stdout.count("(head)") == 1, "more than one head — branched"

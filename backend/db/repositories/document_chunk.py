@@ -19,8 +19,8 @@ There is deliberately no `get(chunk_id)`. ADR-0003 makes the re-validation path
 the principal are dropped" — the single most safety-critical read in the system,
 and it must not have an unscoped alternative sitting next to it.
 
-Chunk *generation*, embedding and Qdrant are M3 and M4. This writes and reads
-rows, nothing more.
+Chunk *generation* is M3/S3.4's chunker, embedding and Qdrant are M4. This
+writes and reads rows, nothing more.
 """
 
 from sqlalchemy import select
@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.models import DocumentChunkORM, DocumentORM
 from backend.db.repositories._identifiers import parse_id
+from shared.models.chunking import ChunkingResult
 from shared.models.document import DocumentChunk
 
 
@@ -35,9 +36,11 @@ def _to_domain(row: DocumentChunkORM) -> DocumentChunk:
     """Map the ORM row to the API contract.
 
     `embedding` is always None: the vector lives in Qdrant and PostgreSQL does
-    not duplicate it. The persistence-only columns `embedding_model_id` and
-    `dimension` have no field on the domain model, so they are not carried —
-    M4 reads them directly when it needs to decide what to re-index.
+    not duplicate it. The persistence-only columns — `embedding_model_id`,
+    `dimension`, `token_count`, `strategy_version`, `tokenizer_id` — have no
+    field on the domain model, so they are not carried; M4 reads them directly
+    when it needs to decide what to re-index. The provenance a citation needs
+    (ADR-0007 §1) is carried.
     """
     return DocumentChunk(
         id=str(row.id),
@@ -45,6 +48,9 @@ def _to_domain(row: DocumentChunkORM) -> DocumentChunk:
         content=row.content,
         embedding=None,
         chunk_index=row.chunk_index,
+        section=row.section,
+        page_start=row.page_start,
+        page_end=row.page_end,
         metadata=dict(row.chunk_metadata or {}),
     )
 
@@ -79,9 +85,9 @@ class DocumentChunkRepository:
         *,
         document_id: str,
         user_id: str,
-        chunks: list[DocumentChunk],
+        chunking: ChunkingResult,
     ) -> list[DocumentChunk]:
-        """Append chunks to a document this user owns.
+        """Append a document's chunks, with their provenance. The one write path.
 
         Raises LookupError if the document does not exist, is not this user's,
         or is soft-deleted. Reads in this module return None or an empty list
@@ -103,9 +109,15 @@ class DocumentChunkRepository:
                 document_id=owned,
                 chunk_index=chunk.chunk_index,
                 content=chunk.content,
-                chunk_metadata=dict(chunk.metadata),
+                section=chunk.section,
+                page_start=chunk.page_start,
+                page_end=chunk.page_end,
+                token_count=chunk.token_count,
+                strategy_version=chunking.strategy_version,
+                tokenizer_id=chunking.tokenizer_id,
+                chunk_metadata={},
             )
-            for chunk in chunks
+            for chunk in chunking.chunks
         ]
         self._session.add_all(rows)
         await self._session.flush()

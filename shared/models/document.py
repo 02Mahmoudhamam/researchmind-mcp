@@ -16,7 +16,7 @@ class DocumentType(str, Enum):
 class DocumentStatus(str, Enum):
     """Where a document is in ingestion — ADR-0009 §4, with one stage added.
 
-    PENDING → PROCESSING → PARSED → … → READY
+    PENDING → PROCESSING → PARSED → PROCESSING → CHUNKED → … → READY
                   ↘ FAILED (from any PROCESSING)
 
     * PENDING    accepted and stored; no stage has run to completion yet, and
@@ -24,15 +24,18 @@ class DocumentStatus(str, Enum):
     * PROCESSING a worker holds the claim and is working on it now
     * PARSED     its text has been extracted and stored, page by page; it is not
                  yet chunked, embedded or searchable (M3/S3.3)
+    * CHUNKED    its text has been split into section-aware chunks and stored;
+                 not yet embedded, so still not searchable (M3/S3.4)
     * READY      processed and available downstream — per ADR-0009, the M3
                  definition of done ("poll until ready, then search") and the
                  project vision, chunked, embedded and searchable. Nothing
                  produces it yet.
     * FAILED     permanently unprocessable; `failure_reason` says why
 
-    PARSED exists because READY must keep meaning "searchable": a client that
-    polls for READY and then searches cannot be told READY for a document with
-    no chunks. Stages after PARSED are later sprints'.
+    PARSED and CHUNKED exist because READY must keep meaning "searchable": a
+    client that polls for READY and then searches cannot be told READY for a
+    document with no chunks, or with chunks nothing has embedded. Embedding and
+    READY are M4's (ADR-0011, ADR-0012).
 
     FAILED replaced the scaffold's ERROR in M3/S3.2 (migration 0004). ADR-0009,
     the accepted decision, names it FAILED; nothing had ever written ERROR.
@@ -41,6 +44,7 @@ class DocumentStatus(str, Enum):
     PENDING = "pending"
     PROCESSING = "processing"
     PARSED = "parsed"
+    CHUNKED = "chunked"
     READY = "ready"
     FAILED = "failed"
 
@@ -89,11 +93,23 @@ class UploadOutcome(BaseModel):
 
 
 class DocumentChunk(BaseModel):
+    """A stored chunk, as reads return it.
+
+    `section`, `page_start` and `page_end` are ADR-0007 §1's provenance: what a
+    citation resolves against, and what a parent-section lookup would walk.
+    `section` is None when no heading was detected above the chunk. The
+    persistence-only columns — token count, strategy version, tokenizer id —
+    are deliberately not here; they drive re-indexing, not reading (ADR-0012).
+    """
+
     id: str
     document_id: str
     content: str
     embedding: Optional[List[float]] = None
     chunk_index: int
+    section: Optional[str] = None
+    page_start: Optional[int] = None
+    page_end: Optional[int] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 

@@ -16,8 +16,8 @@ from backend.db.repositories import (
     DocumentRepository,
     UserRepository,
 )
+from shared.models.chunking import Chunk, ChunkingResult
 from shared.models.document import (
-    DocumentChunk,
     DocumentMetadata,
     DocumentStatus,
     DocumentType,
@@ -49,10 +49,22 @@ async def _make_user(session: AsyncSession, **kwargs: object) -> User:
     )
 
 
-def _chunk(index: int, content: str = "text") -> DocumentChunk:
-    """A domain chunk as M3's pipeline would hand one over."""
-    return DocumentChunk(
-        id=str(uuid.uuid4()), document_id="", content=content, chunk_index=index
+def _chunking(*chunks: Chunk) -> ChunkingResult:
+    """What the chunker hands the repository (M3/S3.4)."""
+    return ChunkingResult(
+        chunks=chunks, strategy_version="section-aware/v1", tokenizer_id="regex-word/v1"
+    )
+
+
+def _chunk(index: int, content: str = "text") -> Chunk:
+    """A chunk as M3/S3.4's chunker produces one, with its provenance."""
+    return Chunk(
+        chunk_index=index,
+        content=content,
+        section="1 Introduction",
+        page_start=1,
+        page_end=1,
+        token_count=len(content.split()) or 1,
     )
 
 
@@ -277,7 +289,9 @@ class TestSoftDelete:
             user_id=user.id, filename="d.pdf", doc_type=DocumentType.PDF
         )
         stored = await chunks.add_many(
-            document_id=document.id, user_id=user.id, chunks=[_chunk(0)]
+            document_id=document.id,
+            user_id=user.id,
+            chunking=_chunking(_chunk(0)),
         )
 
         await documents.soft_delete_for_user(document.id, user.id)
@@ -297,7 +311,9 @@ class TestDocumentChunkRepository:
         await repo.add_many(
             document_id=document.id,
             user_id=user.id,
-            chunks=[_chunk(2, "third"), _chunk(0, "first"), _chunk(1, "second")],
+            chunking=_chunking(
+                _chunk(2, "third"), _chunk(0, "first"), _chunk(1, "second")
+            ),
         )
         listed = await repo.list_for_document(document.id, user.id)
 
@@ -313,7 +329,9 @@ class TestDocumentChunkRepository:
         )
         repo = DocumentChunkRepository(db_session)
         stored = await repo.add_many(
-            document_id=document.id, user_id=user.id, chunks=[_chunk(0, "hello")]
+            document_id=document.id,
+            user_id=user.id,
+            chunking=_chunking(_chunk(0, "hello")),
         )
 
         found = await repo.get_for_user(stored[0].id, user.id)
@@ -332,7 +350,9 @@ class TestDocumentChunkRepository:
         )
         repo = DocumentChunkRepository(db_session)
         stored = await repo.add_many(
-            document_id=document.id, user_id=user.id, chunks=[_chunk(0)]
+            document_id=document.id,
+            user_id=user.id,
+            chunking=_chunking(_chunk(0)),
         )
 
         assert stored[0].embedding is None
@@ -351,7 +371,7 @@ class TestDocumentChunkRepository:
             await repo.add_many(
                 document_id=document.id,
                 user_id=user.id,
-                chunks=[_chunk(0, "a"), _chunk(0, "b")],
+                chunking=_chunking(_chunk(0, "a"), _chunk(0, "b")),
             )
 
     async def test_adding_to_a_document_that_does_not_exist_raises(
@@ -366,5 +386,7 @@ class TestDocumentChunkRepository:
 
         with pytest.raises(LookupError):
             await DocumentChunkRepository(db_session).add_many(
-                document_id=str(uuid.uuid4()), user_id=user.id, chunks=[_chunk(0)]
+                document_id=str(uuid.uuid4()),
+                user_id=user.id,
+                chunking=_chunking(_chunk(0)),
             )
