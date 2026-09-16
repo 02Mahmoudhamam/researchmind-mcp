@@ -836,3 +836,78 @@ class TestTheEmbeddingAndVectorSeamsHold:
         assert not any(name.startswith("qdrant_client") for name in imports)
         assert not any(name.startswith("fastembed") for name in imports)
         assert not any(name.startswith("vector_db") for name in imports)
+
+
+class TestRetrievalDependsOnProtocolsOnly:
+    """M4/S4.1. ADR-0014: the service names no vendor and reads no payload.
+
+    The first two are the same rule S3.5 applied to ingestion. The third is
+    this sprint's, and is the one that matters: a service that consulted the
+    Qdrant payload for ownership would pass every functional test, right up
+    until someone with write access to the index granted themselves a document.
+    """
+
+    SERVICE = ROOT / "backend" / "services" / "search_service.py"
+
+    @staticmethod
+    def _imports(path: pathlib.Path) -> set[str]:
+        import ast
+
+        names: set[str] = set()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                names.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                names.add(node.module or "")
+        return names
+
+    def test_it_imports_no_vendor(self) -> None:
+        forbidden = ("qdrant_client", "fastembed", "numpy", "onnxruntime")
+        imports = self._imports(self.SERVICE)
+        for name in forbidden:
+            assert not any(imported.startswith(name) for imported in imports), name
+
+    def test_it_imports_no_infrastructure_package(self) -> None:
+        """`vector_db` and `document_processing.embedder` are adapters."""
+        imports = self._imports(self.SERVICE)
+        assert not any(name.startswith("vector_db") for name in imports)
+        assert "document_processing.embedder" not in imports
+
+    def test_it_never_reads_the_payload(self) -> None:
+        """ADR-0014 §1. The payload is not an authority, so it is not consulted.
+
+        Written as source inspection because it is a structural claim: a
+        `candidate.payload.user_id` anywhere in this file would be the index
+        deciding ownership, whatever it was then compared against.
+        """
+        code = _statements(self.SERVICE)
+        assert ".payload" not in code
+
+    def test_it_asks_the_index_for_ids_and_scores_only(self) -> None:
+        code = _statements(self.SERVICE)
+        assert "candidate.id" in code and "candidate.score" in code
+
+    def test_the_owner_reaches_the_index_from_the_principal(self) -> None:
+        code = _statements(self.SERVICE)
+        assert "owner_id=principal.user_id" in code
+
+    def test_the_query_model_cannot_carry_an_owner(self) -> None:
+        """Not rejected — unrepresentable, like `Principal.is_active`."""
+        from shared.models.retrieval import RetrievalQuery
+
+        assert not {"user_id", "owner_id", "principal"} & set(
+            RetrievalQuery.model_fields
+        )
+        assert RetrievalQuery.model_config.get("extra") == "forbid"
+
+    def test_the_result_carries_no_infrastructure(self) -> None:
+        from shared.models.retrieval import RetrievalResult
+
+        assert not {"payload", "vector", "embedding", "principal"} & set(
+            RetrievalResult.model_fields
+        )
+
+    def test_the_service_does_not_commit(self) -> None:
+        """Search is read-only; repositories still do not own transactions."""
+        code = _statements(self.SERVICE)
+        assert ".commit()" not in code
