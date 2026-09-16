@@ -90,8 +90,10 @@ from shared.utils.logger import get_logger
 _log = get_logger(__name__)
 
 # The statuses a delivery can still advance: where the recovery sweep looks, and
-# what a final attempt claims before recording that it gave up.
-RECOVERABLE_STATUSES = (DocumentStatus.PENDING,)
+# what a final attempt claims before recording that it gave up. `parsed` joined
+# `pending` in M3/S3.4 — a document whose job died between parsing and chunking
+# is as stranded as one whose job never reached Redis.
+RECOVERABLE_STATUSES = (DocumentStatus.PENDING, DocumentStatus.PARSED)
 
 
 class TransientIngestionError(Exception):
@@ -508,8 +510,11 @@ class IngestionService:
         not record; a Redis outage between an upload's commit and its enqueue.
         Without this, nothing would ever look at those documents again.
 
-        `pending` only for now. Never `processing` — that claim is the
-        reaper's — and never a status past what a job can do.
+        `pending` (M3/S3.3) and, since M3/S3.4, `parsed`: the two statuses a
+        delivery starts a stage from. Never `processing` — that claim is the
+        reaper's, and a document another worker holds must not be handed a
+        second job — and never `chunked`, `ready` or `failed`, which no stage
+        advances.
 
         The job is built from the row PostgreSQL holds — its own `user_id`,
         storage key, hash and type — never from a request, and it passes the
@@ -568,8 +573,8 @@ class IngestionService:
         fresh job with a fresh retry budget — retrying forever, which ADR-0009 §5
         forbids. Recorded as `processing_failure`.
 
-        Still `processing → failed` only: a document that is `pending` is
-        claimed first. A document in `processing` here is this
+        Still `processing → failed` only: a document that is `pending` or
+        `parsed` is claimed first. A document in `processing` here is this
         delivery's own claim — ARQ runs at most one job per document id — or a
         dead worker's, which the reaper would fail anyway. Returns whether a
         failure was recorded. Raises if the database cannot be reached, in which
