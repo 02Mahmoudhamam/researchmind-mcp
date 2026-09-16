@@ -89,7 +89,13 @@ class TestRetryPacing:
         assert retry_delay_seconds(attempt) == RETRY_DELAYS_SECONDS[0]
 
 
+@pytest.mark.embeddings
+@pytest.mark.qdrant
 class TestTheWorkerProcess:
+    """These call the real `startup`, which since M3/S3.5 loads the embedding
+    model and prepares the collection — so they need both, and are marked so a
+    machine without them skips rather than fails."""
+
     async def test_startup_applies_the_logging_settings(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -127,3 +133,47 @@ class TestTheWorkerProcess:
         assert extractor._timeout == settings.INGEST_PARSE_TIMEOUT_SECONDS
         assert extractor._limiter.total_tokens == settings.ARQ_MAX_JOBS
         assert ctx["max_pdf_pages"] == settings.MAX_PDF_PAGES
+
+
+class TestChunksMustFitWhatTheModelReads:
+    """ADR-0013 §1. The guard whose absence is invisible.
+
+    Over the model's input limit the tail of every long chunk is dropped and
+    embedded as though it were not there — a valid-looking vector for text the
+    model never saw. Nothing downstream can detect it, so the worker refuses to
+    start.
+    """
+
+    class _Provider:
+        model_id = "test-model"
+        dimension = 8
+        max_input_tokens = 512
+        tokenizer = None
+
+    def test_a_chunk_that_fits_is_allowed(self) -> None:
+        worker_module.refuse_chunks_the_model_cannot_read(510, self._Provider())
+
+    def test_a_chunk_that_exactly_fills_the_budget_is_allowed(self) -> None:
+        """510 + 2 special tokens == 512. The boundary is inclusive."""
+        worker_module.refuse_chunks_the_model_cannot_read(
+            512 - worker_module.SPECIAL_TOKENS_PER_SEQUENCE, self._Provider()
+        )
+
+    def test_one_token_over_the_budget_is_refused(self) -> None:
+        """511 + 2 > 512: the special tokens are part of what must fit."""
+        with pytest.raises(RuntimeError) as raised:
+            worker_module.refuse_chunks_the_model_cannot_read(511, self._Provider())
+        assert "truncated" in str(raised.value)
+        assert "512" in str(raised.value) and "test-model" in str(raised.value)
+
+    def test_a_much_larger_chunk_size_is_refused(self) -> None:
+        with pytest.raises(RuntimeError):
+            worker_module.refuse_chunks_the_model_cannot_read(4096, self._Provider())
+
+    def test_the_shipped_configuration_fits(self) -> None:
+        """CHUNK_SIZE_TOKENS=400 against bge-small's 512, with room to spare."""
+        from backend.config.settings import get_settings
+
+        worker_module.refuse_chunks_the_model_cannot_read(
+            get_settings().CHUNK_SIZE_TOKENS, self._Provider()
+        )

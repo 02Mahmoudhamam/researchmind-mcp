@@ -67,6 +67,31 @@ def retry_delay_seconds(job_try: int) -> int:
     return RETRY_DELAYS_SECONDS[min(max(job_try, 1), len(RETRY_DELAYS_SECONDS)) - 1]
 
 
+def refuse_chunks_the_model_cannot_read(
+    chunk_size: int, provider: EmbeddingProvider
+) -> None:
+    """Fail startup if a chunk could not fit inside what the model reads.
+
+    A chunk plus the special tokens the model adds to every sequence must fit
+    `max_input_tokens`. Over that the model truncates, and the tail of every
+    long chunk is embedded as though it were not there — silently, with a
+    vector that looks perfectly valid. The worker refuses to start instead
+    (ADR-0013 §1), because a configuration that quietly discards text is worse
+    than one that will not boot.
+
+    Its own function rather than four lines inside `startup`, so it can be
+    asserted without a model, a database and a Redis.
+    """
+    budget = chunk_size + SPECIAL_TOKENS_PER_SEQUENCE
+    if budget > provider.max_input_tokens:
+        raise RuntimeError(
+            f"CHUNK_SIZE_TOKENS={chunk_size} plus {SPECIAL_TOKENS_PER_SEQUENCE} "
+            f"special tokens exceeds the {provider.max_input_tokens} tokens "
+            f"{provider.model_id} reads; chunks would be truncated before they "
+            "were embedded"
+        )
+
+
 async def startup(ctx: dict[str, Any]) -> None:
     """Build the worker's collaborators once per process.
 
@@ -102,18 +127,7 @@ async def startup(ctx: dict[str, Any]) -> None:
     )
     ctx["embedder"] = embedder
 
-    # A chunk plus the two special tokens the model adds to every sequence must
-    # fit what the model reads. Over that, the model truncates and the tail of
-    # every long chunk is embedded as though it were not there — silently. The
-    # worker refuses to start instead (ADR-0013 §1).
-    budget = settings.CHUNK_SIZE_TOKENS + SPECIAL_TOKENS_PER_SEQUENCE
-    if budget > embedder.max_input_tokens:
-        raise RuntimeError(
-            f"CHUNK_SIZE_TOKENS={settings.CHUNK_SIZE_TOKENS} plus "
-            f"{SPECIAL_TOKENS_PER_SEQUENCE} special tokens exceeds the "
-            f"{embedder.max_input_tokens} tokens {embedder.model_id} reads; "
-            "chunks would be truncated before they were embedded"
-        )
+    refuse_chunks_the_model_cannot_read(settings.CHUNK_SIZE_TOKENS, embedder)
 
     # The chunker is stateless and pure. Since M3/S3.5 it counts with the
     # embedding model's own tokenizer, so the ruler that sizes a chunk is the
