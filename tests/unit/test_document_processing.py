@@ -1,37 +1,36 @@
-"""Unit tests for the document processing pipeline.
+"""The chunking stage of the pipeline, at its narrowest.
 
-TextChunker.chunk() is currently a stub (`...`, therefore returning None).
-Chunking is implemented in Milestone M3 — Document Ingestion, per
-docs/adr/0007-defer-parent-document-retrieval.md, which specifies
-section-bounded chunking at roughly 400 tokens with 15% overlap.
+This file held one `xfail(strict=True)` from the repository foundation onward:
+`TextChunker.chunk()` was a stub returning None, and the test was a reminder
+that chunking was Milestone M3's. M3/S3.4 implemented it, so — as that test's
+own docstring said it would — the reminder becomes a regression test.
 
-The test below is kept and marked xfail(strict=True) rather than deleted or
-weakened. Strict means the suite FAILS if it ever starts passing, so the day
-M3 implements chunking, this test stops being a reminder and becomes a
-regression test with no further action needed.
+It is deliberately the *shape* of the old assertion, against the real chunker:
+a long document yields more than one chunk, none empty, indexed contiguously
+from zero. Everything else about chunking — sections, references, overlap,
+determinism, provenance — is tests/unit/test_chunking.py.
 """
 
-import pytest
+from document_processing.chunker import SectionAwareChunker
+from document_processing.tokenization import RegexTokenizer
+from shared.models.extraction import ExtractedPage, TextBlock
 
-from document_processing.chunker import TextChunker
 
+def test_chunker_produces_chunks_covering_the_document() -> None:
+    chunker = SectionAwareChunker(RegexTokenizer(), chunk_size=100, chunk_overlap=20)
+    pages = [
+        ExtractedPage(
+            page_number=1, blocks=(TextBlock(text="word " * 200, font_size=10.0),)
+        )
+    ]
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "TextChunker.chunk() is a stub returning None. Implemented in "
-        "Milestone M3 (Document Ingestion); see ADR-0007."
-    ),
-)
-def test_chunker_produces_chunks_covering_the_document():
-    chunker = TextChunker(chunk_size=100, chunk_overlap=20)
-    text = "word " * 200
+    result = chunker.chunk(pages)
 
-    chunks = chunker.chunk(text, document_id="doc-1")
-
-    assert len(chunks) > 1, "a 200-word document must yield more than one chunk"
-    assert all(c.document_id == "doc-1" for c in chunks)
-    assert all(c.content for c in chunks), "no chunk may be empty"
-    assert [c.chunk_index for c in chunks] == list(
-        range(len(chunks))
+    assert len(result.chunks) > 1, "a 200-word document must yield more than one chunk"
+    assert all(
+        chunk.content.strip() for chunk in result.chunks
+    ), "no chunk may be empty"
+    assert [chunk.chunk_index for chunk in result.chunks] == list(
+        range(len(result.chunks))
     ), "chunk_index must be contiguous and ordered from zero"
+    assert all(chunk.page_start == 1 and chunk.page_end == 1 for chunk in result.chunks)
