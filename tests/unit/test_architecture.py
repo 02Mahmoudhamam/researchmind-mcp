@@ -721,3 +721,118 @@ class TestChunkingStaysBehindItsSeams:
             "self",
             "pages",
         ]
+
+
+class TestTheEmbeddingAndVectorSeamsHold:
+    """M3/S3.5. ADR-0005 §3: the application depends on protocols, not vendors.
+
+    The scaffold had `vector_size = 1536` in a config object and an optional
+    `filters` dict on the search signature. Both were structural, both survived
+    every functional test, and both are the kind of thing that comes back.
+    """
+
+    @staticmethod
+    def _modules() -> list[pathlib.Path]:
+        return [
+            path
+            for directory in ("backend", "shared", "document_processing", "agents")
+            for path in sorted((ROOT / directory).rglob("*.py"))
+            if "__pycache__" not in path.parts
+        ]
+
+    @staticmethod
+    def _imports(path: pathlib.Path) -> set[str]:
+        import ast
+
+        names: set[str] = set()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                names.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                names.add(node.module or "")
+        return names
+
+    def test_only_the_qdrant_adapter_imports_qdrant(self) -> None:
+        """Everything above it speaks `VectorStore`, not `Filter` and `PointStruct`."""
+        offenders = {
+            str(path.relative_to(ROOT))
+            for path in self._modules()
+            if any(name.startswith("qdrant_client") for name in self._imports(path))
+        }
+        assert offenders == set()
+
+    def test_only_the_embedder_imports_fastembed(self) -> None:
+        """One module loads the model; everything else takes an `EmbeddingProvider`."""
+        offenders = {
+            str(path.relative_to(ROOT))
+            for path in self._modules()
+            if any(name.startswith("fastembed") for name in self._imports(path))
+        }
+        assert offenders == {"document_processing/embedder.py"}
+
+    def test_no_module_imports_numpy_or_onnx(self) -> None:
+        """A vector crosses the seam as plain floats, or the seam is a fiction."""
+        offenders = {
+            str(path.relative_to(ROOT))
+            for path in self._modules()
+            if {"numpy", "onnxruntime"}
+            & {name.split(".")[0] for name in self._imports(path)}
+        }
+        assert offenders == set()
+
+    def test_the_dimension_is_never_a_literal(self) -> None:
+        """ADR-0005 §2. 1536 was OpenAI's; this project's model produces 384.
+
+        A literal cannot be wrong for long without being wrong silently, so it
+        comes from the provider or it does not exist.
+        """
+        import ast
+
+        for path in self._modules() + sorted((ROOT / "vector_db").rglob("*.py")):
+            if "__pycache__" in path.parts:
+                continue
+            # The integer literal, found in the syntax tree — not the digits,
+            # which also occur inside "HS384" and any long hash.
+            literals = {
+                node.value
+                for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+                if isinstance(node, ast.Constant) and isinstance(node.value, int)
+            }
+            assert not literals & {384, 1536}, path
+
+    def test_the_owner_is_required_wherever_a_vector_can_be_reached(self) -> None:
+        """`principles.md` §3: the safe path must be the only path.
+
+        Not a style check. `BaseVectorStore.search(filters=None)` made the
+        unscoped call the short one, and a caller who forgot got every tenant's
+        chunks back.
+        """
+        import inspect
+
+        from shared.interfaces.vector_store import VectorStore
+        from vector_db.qdrant.repository import QdrantVectorStore
+
+        reachable = ("search", "delete_document", "count_for_document")
+        for holder in (VectorStore, QdrantVectorStore):
+            for name in reachable:
+                signature = inspect.signature(getattr(holder, name))
+                owner = signature.parameters.get("owner_id")
+                assert owner is not None, f"{holder.__name__}.{name}"
+                assert owner.kind is inspect.Parameter.KEYWORD_ONLY, name
+                assert owner.default is inspect.Parameter.empty, name
+
+    def test_nothing_offers_an_optional_filter_dictionary(self) -> None:
+        """The scaffold's `filters: Optional[dict] = None`, kept out by name."""
+        for path in sorted((ROOT / "vector_db").rglob("*.py")) + [
+            ROOT / "shared" / "interfaces" / "vector_store.py"
+        ]:
+            if "__pycache__" in path.parts:
+                continue
+            assert "filters" not in _statements(path), path
+
+    def test_the_ingestion_service_depends_on_neither_vendor(self) -> None:
+        service = ROOT / "backend" / "services" / "ingestion_service.py"
+        imports = self._imports(service)
+        assert not any(name.startswith("qdrant_client") for name in imports)
+        assert not any(name.startswith("fastembed") for name in imports)
+        assert not any(name.startswith("vector_db") for name in imports)

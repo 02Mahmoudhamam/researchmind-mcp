@@ -6,7 +6,7 @@ from shared.interfaces.pdf_extraction import PdfTextExtractor
 from document_processing.chunker import SectionAwareChunker
 from shared.interfaces.embedding import EmbeddingProvider
 from document_processing.metadata_extractor import MetadataExtractor
-from vector_db.qdrant.repository import QdrantVectorRepository
+from shared.interfaces.vector_store import VectorStore
 
 
 class DocumentProcessingPipeline:
@@ -26,7 +26,10 @@ class DocumentProcessingPipeline:
         # built in the worker's startup; wire this pipeline to it or retire it.
         self._embedder: EmbeddingProvider | None = None
         self._extractor = MetadataExtractor()
-        self._vector_store = QdrantVectorRepository()
+        # TODO(M3/3.10): the vector store exists since S3.5
+        # (QdrantVectorStore), built in the worker's startup; wire this
+        # pipeline to it or retire it.
+        self._vector_store: VectorStore | None = None
 
     async def process(self, document: Document, file_path: Path) -> Document:
         """Run a document through the complete processing pipeline."""

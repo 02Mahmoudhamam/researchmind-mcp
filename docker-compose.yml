@@ -22,11 +22,14 @@ services:
       # only for the container to start, which for PostgreSQL means "the
       # process exists", not "it accepts connections" — the API would come up
       # first and fail its first query. `service_started` is what the list form
-      # already meant for qdrant and redis, so their behaviour is unchanged.
+      # already meant for redis, so its behaviour is unchanged. Qdrant gained a
+      # healthcheck in M3/S3.5 and now waits on it for the same reason
+      # PostgreSQL does: the worker asserts the collection's dimension at
+      # startup, and a Qdrant that has not opened its port yet would fail it.
       postgres:
         condition: service_healthy
       qdrant:
-        condition: service_started
+        condition: service_healthy
       redis:
         condition: service_started
     volumes:
@@ -44,8 +47,15 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://researchmind:researchmind@postgres:5432/researchmind
       REDIS_HOST: redis
+      # Since M3/S3.5 the worker embeds and upserts, so it needs the vector
+      # store by its compose hostname, and the weights the image already
+      # carries — never a download while a document is waiting (ADR-0004 §2).
+      QDRANT_HOST: qdrant
+      EMBEDDING_CACHE_DIR: /app/.fastembed_cache
     depends_on:
       postgres:
+        condition: service_healthy
+      qdrant:
         condition: service_healthy
       redis:
         condition: service_started
@@ -90,12 +100,21 @@ services:
       retries: 10
       start_period: 10s
 
+  # The vector store (ADR-0003). Pinned, not `latest`: this one holds state,
+  # and a collection built by one version being read by another is not
+  # something a `docker compose pull` should decide. CI runs the same version.
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.19.1
     ports:
       - "6333:6333"
     volumes:
       - qdrant_data:/qdrant/storage
+    healthcheck:
+      # Qdrant's image carries no curl, so this asks bash to open the port.
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333'"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:7-alpine
