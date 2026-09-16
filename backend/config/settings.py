@@ -158,6 +158,13 @@ class Settings(BaseSettings):
     RETRIEVAL_TOP_K: int = 10
     RETRIEVAL_SCORE_THRESHOLD: float = 0.7
 
+    # A cheap bound on a search query, checked before anything tokenizes or
+    # embeds it. It is not the real limit — that is the embedding model's
+    # `max_input_tokens`, which the service checks next (ADR-0014 §8) — it is
+    # what stops a megabyte of text reaching the tokenizer at all. Generous for
+    # a question: roughly a page of prose, several times what 512 tokens holds.
+    RETRIEVAL_MAX_QUERY_CHARS: int = 2000
+
     # Redis
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379
@@ -328,7 +335,10 @@ class Settings(BaseSettings):
         return value
 
     @field_validator(
-        "EMBEDDING_BATCH_SIZE", "RETRIEVAL_TOP_K", "QDRANT_TIMEOUT_SECONDS"
+        "EMBEDDING_BATCH_SIZE",
+        "RETRIEVAL_TOP_K",
+        "RETRIEVAL_MAX_QUERY_CHARS",
+        "QDRANT_TIMEOUT_SECONDS",
     )
     @classmethod
     def _require_positive_embedding_setting(cls, value: int) -> int:

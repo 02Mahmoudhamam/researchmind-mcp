@@ -19,6 +19,17 @@ from shared.interfaces.tokenization import Tokenizer
 # A vector as the application passes it around: plain floats, never a tensor.
 Vector = tuple[float, ...]
 
+# How many tokens a model adds to every sequence of its own accord — `[CLS]`
+# and `[SEP]` for the BERT-family vocabularies ADR-0004 selects from. They carry
+# no text, so they are excluded from chunk and query token counts, and they are
+# added back when checking that either fits `max_input_tokens`.
+#
+# Here rather than beside a provider, because both sides of this seam need it:
+# the worker sizes chunks with it, and retrieval sizes queries with it — and
+# retrieval must not import a vendor module to learn a number (ADR-0014).
+# Asserted against the real tokenizer in `tests/unit/test_embeddings.py`.
+SPECIAL_TOKENS_PER_SEQUENCE = 2
+
 
 class EmbeddingError(Exception):
     """A provider could not embed. The message names no text and no credential."""

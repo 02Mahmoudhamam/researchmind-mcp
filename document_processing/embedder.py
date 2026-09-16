@@ -17,16 +17,12 @@ from typing import Any, Sequence
 import anyio.to_thread
 from fastembed import TextEmbedding
 
-from shared.interfaces.embedding import EmbeddingError, Vector
+from shared.interfaces.embedding import EmbeddingError, Vector  # noqa: F401
 from shared.interfaces.tokenization import TokenSpan
 
 # The tokenizer's id is the model's, made short and marked with what it is. It
 # is written to every chunk, so it must fit `document_chunks.tokenizer_id`.
 _TOKENIZER_SUFFIX = "wordpiece"
-
-# `[CLS]` and `[SEP]`: the model adds them to every sequence, so a chunk's
-# budget must leave room for them (ADR-0013 §1).
-SPECIAL_TOKENS_PER_SEQUENCE = 2
 
 
 def _tokenizer_id_for(model_id: str) -> str:

@@ -25,7 +25,7 @@ them for a re-chunk, and recording which model embedded them. Qdrant is
 elsewhere: nothing here touches a vector.
 """
 
-from typing import Any, cast
+from typing import Any, Sequence, cast
 
 from sqlalchemy import CursorResult, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,7 +33,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.models import DocumentChunkORM, DocumentORM
 from backend.db.repositories._identifiers import parse_id
 from shared.models.chunking import ChunkingResult, chunk_id_for
-from shared.models.document import DocumentChunk
+from shared.models.document import DocumentChunk, DocumentStatus
+from shared.models.retrieval import ValidatedChunk
 
 
 def _to_domain(row: DocumentChunkORM) -> DocumentChunk:
@@ -268,3 +269,78 @@ class DocumentChunkRepository:
             .values(embedding_model_id=embedding_model_id, dimension=dimension)
         )
         return int(cast("CursorResult[Any]", result).rowcount or 0)
+
+    async def validate_for_retrieval(
+        self,
+        chunk_ids: Sequence[str],
+        user_id: str,
+        *,
+        embedding_model_id: str,
+        dimension: int,
+    ) -> dict[str, ValidatedChunk]:
+        """Resolve candidate chunk ids to rows this user may actually retrieve.
+
+        ADR-0003 §5's *correct path*, and `principles.md` §3's "returned chunk
+        ids are re-fetched from PostgreSQL and any not owned by the principal
+        are dropped" — as one statement, for the whole batch.
+
+        The caller passes **ids and nothing else**. Every other fact — which
+        document a chunk belongs to, who owns it, whether it still exists,
+        whether it is searchable, what its text says — is read here, from the
+        database. A Qdrant payload claiming a different owner or a different
+        document is not compared against anything, because nothing it says is
+        consulted (ADR-0014 §1).
+
+        Five conditions, all in the SQL predicate rather than in a loop above
+        it:
+
+        * the chunk exists;
+        * its document belongs to `user_id`;
+        * its document is not soft-deleted;
+        * its document is `ready` — the only searchable status, and vectors
+          outlive documents by design (ADR-0013), so existence proves nothing;
+        * it was embedded by **this** model at this width, because a score
+          against a vector from another space is not a ranking.
+
+        Returns a mapping from chunk id to the validated row, so the caller can
+        preserve the candidate order the vector store returned (ADR-0014 §5). Ids that
+        fail any condition are simply absent — "not yours", "not there" and
+        "not searchable" are one answer, as everywhere else here. Reads only;
+        does not commit.
+        """
+        wanted = {chunk: parse_id(chunk) for chunk in chunk_ids}
+        targets = [parsed for parsed in wanted.values() if parsed is not None]
+        owner = parse_id(user_id)
+        if not targets or owner is None:
+            return {}
+
+        result = await self._session.execute(
+            select(DocumentChunkORM, DocumentORM.id)
+            .join(DocumentORM, DocumentChunkORM.document_id == DocumentORM.id)
+            .where(
+                DocumentChunkORM.id.in_(targets),
+                DocumentORM.user_id == owner,
+                DocumentORM.deleted_at.is_(None),
+                DocumentORM.status == DocumentStatus.READY,
+                DocumentChunkORM.embedding_model_id == embedding_model_id,
+                DocumentChunkORM.dimension == dimension,
+            )
+        )
+
+        validated: dict[str, ValidatedChunk] = {}
+        for row, document_id in result.all():
+            if row.page_start is None or row.page_end is None:
+                # NOT NULL since migration 0006; a row without pages could not
+                # be cited, and a result that cannot be cited is not a result.
+                continue
+            validated[str(row.id)] = ValidatedChunk(
+                chunk_id=str(row.id),
+                document_id=str(document_id),
+                content=row.content,
+                chunk_index=row.chunk_index,
+                section=row.section,
+                page_start=row.page_start,
+                page_end=row.page_end,
+                embedding_model_id=embedding_model_id,
+            )
+        return validated
