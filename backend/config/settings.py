@@ -119,6 +119,16 @@ class Settings(BaseSettings):
     INGEST_STALE_PROCESSING_SECONDS: int = 900
     INGEST_PARSE_TIMEOUT_SECONDS: int = 180
 
+    # Chunking (M3/S3.4, ADR-005 §3 and §6, ADR-0012)
+    #
+    # ADR-005 fixes the shape: chunk "at ~400 tokens with ~15% overlap", counted
+    # in tokens rather than characters — the ambiguity that ADR exists to end.
+    # Tokens are counted by the `Tokenizer` the chunker is given, currently the
+    # provisional `regex-word/v1`, so these are its tokens and not an embedding
+    # model's; M4 revisits both together.
+    CHUNK_SIZE_TOKENS: int = 400
+    CHUNK_OVERLAP_TOKENS: int = 60
+
     # Qdrant
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
@@ -260,6 +270,22 @@ class Settings(BaseSettings):
                 "INGEST_PARSE_TIMEOUT_SECONDS must be less than "
                 "INGEST_JOB_TIMEOUT_SECONDS"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _chunks_must_advance(self) -> "Settings":
+        """A window must be positive, and must move.
+
+        An overlap at or above the chunk size would re-read the same tokens for
+        ever: the chunker steps `size - overlap` tokens, so a step of zero or
+        less is not a smaller step, it is a loop.
+        """
+        if self.CHUNK_SIZE_TOKENS <= 0:
+            raise ValueError("CHUNK_SIZE_TOKENS must be positive")
+        if self.CHUNK_OVERLAP_TOKENS < 0:
+            raise ValueError("CHUNK_OVERLAP_TOKENS must not be negative")
+        if self.CHUNK_OVERLAP_TOKENS >= self.CHUNK_SIZE_TOKENS:
+            raise ValueError("CHUNK_OVERLAP_TOKENS must be less than CHUNK_SIZE_TOKENS")
         return self
 
     @field_validator("MAX_UPLOAD_BYTES", "MAX_PDF_PAGES")
