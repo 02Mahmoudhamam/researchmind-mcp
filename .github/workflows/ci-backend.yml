@@ -14,6 +14,7 @@
 #                   and to PDF text extraction             — M3/S3.3
 #                   and to section-aware chunking          — M3/S3.4
 #                   and to embeddings                      — M3/S3.5
+#                   and to retrieval                       — M4/S4.1
 #
 # mypy is promoted at M2 as scheduled, but over the finished surface only — not
 # the whole repository — and the scope is the honest part. `mypy .` still
@@ -31,7 +32,8 @@
 # extracted-page model and repository; and since M3/S3.4 the chunker, section
 # detection, the tokenizer and its seam, and chunk persistence; and since
 # M3/S3.5 the embedding provider, its authoritative tokenizer, the vector
-# store seam and the Qdrant adapter.
+# store seam and the Qdrant adapter; and since M4/S4.1 the search service, the
+# retrieval models and the chunk validation behind them.
 # `--follow-imports=silent` limits reporting to the listed files while still
 # type-checking against everything they import.
 # Each later sprint adds the files it makes real.
@@ -208,7 +210,9 @@ jobs:
             document_processing/embedder.py \
             shared/interfaces/embedding.py \
             shared/interfaces/vector_store.py \
-            vector_db/qdrant/
+            vector_db/qdrant/ \
+            backend/services/search_service.py \
+            shared/models/retrieval.py
 
       - name: Assert `import mcp` resolves to the SDK, not this repository
         run: |

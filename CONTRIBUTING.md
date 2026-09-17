@@ -21,6 +21,7 @@ Read first:
 - [docs/development/pdf-extraction.md](docs/development/pdf-extraction.md) — PDF text extraction: stored format, reading order, cleaning, failures and the time budget
 - [docs/development/chunking.md](docs/development/chunking.md) — section detection and section-aware chunking: the tokenizer seam, references, provenance and the `chunked` status
 - [docs/development/embeddings.md](docs/development/embeddings.md) — embeddings, the vector store and `ready`: the model and its tokenizer, version-driven re-chunking, derived point ids, the owner filter, and why Qdrant is written before PostgreSQL
+- [docs/development/retrieval.md](docs/development/retrieval.md) — search: why Qdrant only proposes candidates, what PostgreSQL re-validates, `ready` eligibility, ordering and duplicates, stale vectors, and why an outage is not an empty result
 - [docs/adr/](docs/adr/) — why the system is shaped this way
 - [docs/security/principles.md](docs/security/principles.md) — non-negotiable invariants
 
