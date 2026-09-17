@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import event, text
 
 from backend.config.settings import get_settings
 from backend.db.engine import get_engine
@@ -357,6 +357,40 @@ class TestPostgresqlDecidesEligibility:
             )
         assert validated == {}
 
+    async def test_candidates_with_no_usable_id_reach_no_query_at_all(
+        self, committing_session: Any
+    ) -> None:
+        """`IN ()` would return nothing anyway, so this is about the round trip.
+
+        A batch whose ids are all unparseable cannot match a row, and §16's
+        rule is that retrieval does not spend queries it can answer without
+        one. Asserted by watching the statements rather than the result,
+        because the result is the same either way.
+        """
+        owner = await _owner(committing_session)
+        statements: list[str] = []
+
+        def capture(conn: Any, cursor: Any, statement: str, *args: Any) -> None:
+            statements.append(statement)
+
+        engine = get_engine().sync_engine
+        event.listen(engine, "before_cursor_execute", capture)
+        try:
+            async with get_sessionmaker()() as session:
+                validated = await DocumentChunkRepository(
+                    session
+                ).validate_for_retrieval(
+                    ["not-a-uuid", ""],
+                    owner.user_id,
+                    embedding_model_id=STUB_MODEL_ID,
+                    dimension=STUB_DIMENSION,
+                )
+        finally:
+            event.remove(engine, "before_cursor_execute", capture)
+
+        assert validated == {}
+        assert not [s for s in statements if "document_chunks" in s], statements
+
 
 class TestTenantIsolation:
     """Principal.user_id == Qdrant owner_id == documents.user_id, or nothing."""
@@ -395,6 +429,39 @@ class TestTenantIsolation:
 
         assert results
         assert scoped == ()
+
+    async def test_scoping_to_your_own_document_still_returns_it(
+        self, vector_store: Any, two_corpora: tuple[Principal, str, Principal, str]
+    ) -> None:
+        """The other half of document scoping, and the half that can rot.
+
+        Every other scoping test here expects nothing back, so a defect that
+        made *all* scoped searches empty — the owner filter fed a document id,
+        say — would satisfy them all. This is the case that fails when scoping
+        stops working rather than when it starts leaking.
+        """
+        alice, alice_document, _bob, _bob_document = two_corpora
+
+        results = await _search_document_ids(vector_store, alice, [alice_document])
+
+        assert results
+        assert {r.document_id for r in results} == {alice_document}
+
+    async def test_scoping_narrows_to_one_of_your_own_documents(
+        self, committing_session: Any, root: Path, vector_store: Any
+    ) -> None:
+        """Two documents, one owner: scoping must exclude the other."""
+        await vector_store.ensure_collection(dimension=STUB_DIMENSION)
+        owner = await _owner(committing_session)
+        first = await _ingest(committing_session, root, owner, vector_store)
+        second = await _ingest(committing_session, root, owner, vector_store)
+
+        everything = await _search(vector_store, owner)
+        scoped = await _search_document_ids(vector_store, owner, [second])
+
+        assert {r.document_id for r in everything} == {first, second}
+        assert scoped
+        assert {r.document_id for r in scoped} == {second}
 
     async def test_a_stale_payload_claiming_another_owner_grants_nothing(
         self, committing_session: Any, root: Path, vector_store: Any
