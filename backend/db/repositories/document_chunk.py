@@ -19,16 +19,20 @@ There is deliberately no `get(chunk_id)`. ADR-0003 makes the re-validation path
 the principal are dropped" — the single most safety-critical read in the system,
 and it must not have an unscoped alternative sitting next to it.
 
-Chunk *generation* is M3/S3.4's chunker, embedding and Qdrant are M4. This
-writes and reads rows, nothing more.
+Chunk *generation* is M3/S3.4's chunker; M3/S3.5 added the reads and writes
+the embed stage needs — which provenance a document's chunks carry, deleting
+them for a re-chunk, and recording which model embedded them. Qdrant is
+elsewhere: nothing here touches a vector.
 """
 
-from sqlalchemy import select
+from typing import Any, cast
+
+from sqlalchemy import CursorResult, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.models import DocumentChunkORM, DocumentORM
 from backend.db.repositories._identifiers import parse_id
-from shared.models.chunking import ChunkingResult
+from shared.models.chunking import ChunkingResult, chunk_id_for
 from shared.models.document import DocumentChunk
 
 
@@ -106,6 +110,15 @@ class DocumentChunkRepository:
 
         rows = [
             DocumentChunkORM(
+                # Derived, not drawn (ADR-0013 §4). This id is also the chunk's
+                # Qdrant point id, so re-running the pipeline over the same
+                # document writes the same points instead of a second set.
+                id=chunk_id_for(
+                    document_id=str(owned),
+                    chunk_index=chunk.chunk_index,
+                    strategy_version=chunking.strategy_version,
+                    tokenizer_id=chunking.tokenizer_id,
+                ),
                 document_id=owned,
                 chunk_index=chunk.chunk_index,
                 content=chunk.content,
@@ -168,3 +181,90 @@ class DocumentChunkRepository:
             .order_by(DocumentChunkORM.chunk_index)
         )
         return [_to_domain(row) for row in result.scalars().all()]
+
+    async def provenance_for_document(
+        self, document_id: str, user_id: str
+    ) -> set[tuple[str, str]]:
+        """Which (strategy, tokenizer) pairs this document's chunks were made by.
+
+        A **set**, not one pair, because "all of them agree" is the thing the
+        embed stage has to check rather than assume (ADR-0013 §2). Empty for a
+        document with no chunks, or one this user does not own. More than one
+        pair means a previous run was interrupted between two versions, and the
+        document is re-chunked exactly as a stale one is.
+        """
+        target, owner = parse_id(document_id), parse_id(user_id)
+        if target is None or owner is None:
+            return set()
+
+        result = await self._session.execute(
+            select(DocumentChunkORM.strategy_version, DocumentChunkORM.tokenizer_id)
+            .join(DocumentORM, DocumentChunkORM.document_id == DocumentORM.id)
+            .where(
+                DocumentChunkORM.document_id == target,
+                DocumentORM.user_id == owner,
+                DocumentORM.deleted_at.is_(None),
+            )
+            .distinct()
+        )
+        return {(strategy, tokenizer) for strategy, tokenizer in result.all()}
+
+    async def delete_for_document(self, document_id: str, user_id: str) -> int:
+        """Remove a document's chunks, so it can be chunked again.
+
+        Owner-scoped through a subquery on `documents`, for the same reason
+        every read here is: the predicate belongs in the SQL, not in an `if`
+        above it. Returns how many rows went. Does not commit.
+        """
+        target, owner = parse_id(document_id), parse_id(user_id)
+        if target is None or owner is None:
+            return 0
+
+        owned = (
+            select(DocumentORM.id)
+            .where(
+                DocumentORM.id == target,
+                DocumentORM.user_id == owner,
+                DocumentORM.deleted_at.is_(None),
+            )
+            .scalar_subquery()
+        )
+        result = await self._session.execute(
+            delete(DocumentChunkORM).where(DocumentChunkORM.document_id == owned)
+        )
+        return int(cast("CursorResult[Any]", result).rowcount or 0)
+
+    async def mark_embedded(
+        self,
+        document_id: str,
+        user_id: str,
+        *,
+        embedding_model_id: str,
+        dimension: int,
+    ) -> int:
+        """Record which model embedded this document's chunks, and how wide.
+
+        Written in the same transaction that sets `ready` (ADR-0013 §3): a
+        document that says it is searchable must also say what made it
+        searchable, or a later model change could not tell what to re-index.
+        Returns how many rows were marked. Does not commit.
+        """
+        target, owner = parse_id(document_id), parse_id(user_id)
+        if target is None or owner is None:
+            return 0
+
+        owned = (
+            select(DocumentORM.id)
+            .where(
+                DocumentORM.id == target,
+                DocumentORM.user_id == owner,
+                DocumentORM.deleted_at.is_(None),
+            )
+            .scalar_subquery()
+        )
+        result = await self._session.execute(
+            update(DocumentChunkORM)
+            .where(DocumentChunkORM.document_id == owned)
+            .values(embedding_model_id=embedding_model_id, dimension=dimension)
+        )
+        return int(cast("CursorResult[Any]", result).rowcount or 0)

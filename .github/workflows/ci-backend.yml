@@ -13,10 +13,11 @@
 #                   and to the ingestion worker            — M3/S3.2
 #                   and to PDF text extraction             — M3/S3.3
 #                   and to section-aware chunking          — M3/S3.4
+#                   and to embeddings                      — M3/S3.5
 #
 # mypy is promoted at M2 as scheduled, but over the finished surface only — not
 # the whole repository — and the scope is the honest part. `mypy .` still
-# reports 113 errors, most of them `empty-body`: stubs in M4–M6 subsystems that
+# reports 104 errors, most of them `empty-body`: stubs in M4–M6 subsystems that
 # declare a non-Optional return and then `...`. Those are the unimplemented
 # system, not type bugs, and enforcing them would mean a permanently red
 # pipeline or blanket ignores; both teach people to ignore CI.
@@ -28,8 +29,11 @@
 # repository and models; since M3/S3.2 the ingestion service, ARQ queue and
 # worker; since M3/S3.3 the PDF extractor, its interface and models, and the
 # extracted-page model and repository; and since M3/S3.4 the chunker, section
-# detection, the tokenizer and its seam, and chunk persistence. `--follow-imports=silent` limits reporting to
-# the listed files while still type-checking against everything they import.
+# detection, the tokenizer and its seam, and chunk persistence; and since
+# M3/S3.5 the embedding provider, its authoritative tokenizer, the vector
+# store seam and the Qdrant adapter.
+# `--follow-imports=silent` limits reporting to the listed files while still
+# type-checking against everything they import.
 # Each later sprint adds the files it makes real.
 name: Backend CI
 
@@ -85,6 +89,20 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+      # The vector store (ADR-0003, M3/S3.5). A container this job creates and
+      # throws away — never a shared or public instance. Tests marked `qdrant`
+      # build their own collection inside it and drop it, so the isolation
+      # invariant is asserted against a real server rather than a mock of one.
+      qdrant:
+        image: qdrant/qdrant:v1.19.1
+        ports:
+          - 6333:6333
+        options: >-
+          --health-cmd "bash -c ':> /dev/tcp/127.0.0.1/6333'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     env:
       DATABASE_URL: postgresql+asyncpg://researchmind:researchmind@localhost:5432/researchmind
       # Turns "database unreachable" from a skip into a failure. A skipped test
@@ -94,6 +112,14 @@ jobs:
       # The same, for Redis: without it the worker tests would skip, and a
       # skipped test reports success.
       REQUIRE_REDIS: "1"
+      # And for the embedding model (M3/S3.5). Its weights are fetched into the
+      # cache below; without this flag a fetch that silently failed would turn
+      # the provider and tokenizer tests into passes.
+      REQUIRE_EMBEDDINGS: "1"
+      # And for Qdrant: the tenant-isolation tests are the ones that must never
+      # turn into skips.
+      REQUIRE_QDRANT: "1"
+      EMBEDDING_CACHE_DIR: .fastembed_cache
 
     steps:
       - uses: actions/checkout@v7
@@ -111,6 +137,14 @@ jobs:
           path: .venv
           key: venv-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('poetry.lock') }}
 
+      - name: Cache the embedding model's weights
+        uses: actions/cache@v6
+        with:
+          path: .fastembed_cache
+          # Keyed on the model, not the lockfile: the weights change when the
+          # model does, and a Poetry upgrade should not re-download 67 MB.
+          key: fastembed-${{ runner.os }}-bge-small-en-v1.5
+
       - name: Validate pyproject
         run: poetry check
 
@@ -119,6 +153,12 @@ jobs:
 
       - name: Install dependencies
         run: poetry install --no-interaction
+
+      - name: Fetch the embedding model (ADR-0004)
+        run: |
+          # Prints the measured dimension, so a cache that restored something
+          # unusable fails here rather than inside the test run.
+          poetry run python scripts/fetch-embedding-model.py
 
       - name: Lint (ruff)
         run: poetry run ruff check .
@@ -164,7 +204,11 @@ jobs:
             shared/interfaces/tokenization.py \
             shared/models/chunking.py \
             backend/db/models/document_chunk.py \
-            backend/db/repositories/document_chunk.py
+            backend/db/repositories/document_chunk.py \
+            document_processing/embedder.py \
+            shared/interfaces/embedding.py \
+            shared/interfaces/vector_store.py \
+            vector_db/qdrant/
 
       - name: Assert `import mcp` resolves to the SDK, not this repository
         run: |

@@ -129,10 +129,34 @@ class Settings(BaseSettings):
     CHUNK_SIZE_TOKENS: int = 400
     CHUNK_OVERLAP_TOKENS: int = 60
 
+    # Embeddings (M3/S3.5; ADR-0004, ADR-0005, ADR-0013)
+    #
+    # The provider is named, not assumed: only `fastembed` is implemented, and a
+    # value naming anything else is refused rather than silently substituted —
+    # embedding with a model nobody asked for produces an index that looks fine
+    # and answers wrongly. ADR-0004's `openai` opt-in is not implemented here.
+    #
+    # The dimension is deliberately absent: ADR-0005 makes it a property of the
+    # active provider, never a literal, and the collection is created from it.
+    EMBEDDING_PROVIDER: str = "fastembed"
+    EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
+    # Chunks embedded per call into the model. Larger batches are faster and
+    # hold more of the document in memory at once.
+    EMBEDDING_BATCH_SIZE: int = 32
+    # Where FastEmbed keeps the model. The image bakes it in and points here, so
+    # a worker never downloads a model while a job is waiting (ADR-0004 §2).
+    # None leaves FastEmbed its own default, which is right for a developer.
+    EMBEDDING_CACHE_DIR: str | None = None
+
     # Qdrant
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
     QDRANT_COLLECTION: str = "researchmind"
+    QDRANT_TIMEOUT_SECONDS: int = 30
+
+    # Retrieval (M4 queries with these; S3.5 owns the store they read)
+    RETRIEVAL_TOP_K: int = 10
+    RETRIEVAL_SCORE_THRESHOLD: float = 0.7
 
     # Redis
     REDIS_HOST: str = "localhost"
@@ -287,6 +311,45 @@ class Settings(BaseSettings):
         if self.CHUNK_OVERLAP_TOKENS >= self.CHUNK_SIZE_TOKENS:
             raise ValueError("CHUNK_OVERLAP_TOKENS must be less than CHUNK_SIZE_TOKENS")
         return self
+
+    @field_validator("EMBEDDING_PROVIDER")
+    @classmethod
+    def _only_an_implemented_provider(cls, value: str) -> str:
+        """Fail closed on a provider nobody wrote.
+
+        ADR-0004 keeps `openai` as a documented opt-in; it is not implemented.
+        Accepting the name and quietly using FastEmbed would embed a corpus
+        with a model the operator did not choose.
+        """
+        if value != "fastembed":
+            raise ValueError(
+                f"EMBEDDING_PROVIDER={value!r} is not implemented; only 'fastembed' is"
+            )
+        return value
+
+    @field_validator(
+        "EMBEDDING_BATCH_SIZE", "RETRIEVAL_TOP_K", "QDRANT_TIMEOUT_SECONDS"
+    )
+    @classmethod
+    def _require_positive_embedding_setting(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("embedding and retrieval settings must be positive")
+        return value
+
+    @field_validator("RETRIEVAL_SCORE_THRESHOLD")
+    @classmethod
+    def _a_similarity_score_is_a_fraction(cls, value: float) -> float:
+        """Cosine similarity over normalised vectors: outside [0, 1] filters all or nothing."""
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("RETRIEVAL_SCORE_THRESHOLD must be between 0 and 1")
+        return value
+
+    @field_validator("EMBEDDING_MODEL")
+    @classmethod
+    def _a_model_must_be_named(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("EMBEDDING_MODEL must name a model")
+        return value
 
     @field_validator("MAX_UPLOAD_BYTES", "MAX_PDF_PAGES")
     @classmethod

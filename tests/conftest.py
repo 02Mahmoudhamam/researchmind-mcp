@@ -16,6 +16,7 @@ the same configuration on every machine and in CI, and it means a real
 ``ANTHROPIC_API_KEY`` present in the shell cannot leak into a test run.
 """
 
+import dataclasses
 import os
 from typing import Any, AsyncIterator
 
@@ -40,6 +41,10 @@ _TEST_ENV: dict[str, str] = {
     # and after each test; on a developer's machine database 0 is the one
     # docker compose's Redis is actually used with.
     "REDIS_DB": "15",
+    # A collection name no deployment uses. Each test still builds its own
+    # uniquely-suffixed collection and drops it, but this is the net
+    # underneath: a test that forgot would not touch `researchmind`.
+    "QDRANT_COLLECTION": "researchmind_test",
 }
 
 for _key, _value in _TEST_ENV.items():
@@ -139,6 +144,82 @@ def _redis_is_reachable() -> bool:
         return False
 
 
+_EMBEDDING_PROVIDER: object | None = None
+
+
+def _embedding_model_is_available() -> bool:
+    """Load the embedding model once per run, and keep it for the tests.
+
+    The parallel to `_database_is_reachable` is exact: this is the real thing,
+    not a stand-in. A cold cache downloads ~67 MB, which is why CI pre-fetches
+    it and the image bakes it in; without it, the tests that need it skip.
+    """
+    global _EMBEDDING_PROVIDER
+    if _EMBEDDING_PROVIDER is not None:
+        return True
+    try:
+        from document_processing.embedder import FastEmbedProvider
+
+        _EMBEDDING_PROVIDER = FastEmbedProvider(
+            os.environ.get("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5"),
+            cache_dir=os.environ.get("EMBEDDING_CACHE_DIR") or None,
+        )
+        return True
+    except Exception:
+        return False
+
+
+@pytest.fixture(scope="session")
+def embedding_provider() -> Any:
+    """The one loaded model, shared by every test that needs it."""
+    assert _EMBEDDING_PROVIDER is not None, "the collection gate should have loaded it"
+    return _EMBEDDING_PROVIDER
+
+
+def _qdrant_is_reachable() -> bool:
+    """Open a real TCP connection to the configured Qdrant, once per run."""
+    import socket
+
+    host = os.environ.get("QDRANT_HOST", "localhost")
+    port = int(os.environ.get("QDRANT_PORT", "6333"))
+    try:
+        with socket.create_connection((host, port), 2.0):
+            return True
+    except OSError:
+        return False
+
+
+@pytest.fixture()
+async def vector_store(request: pytest.FixtureRequest) -> AsyncIterator[Any]:
+    """A `QdrantVectorStore` over a collection built for this test alone.
+
+    Named after the test and dropped afterwards, so tests cannot see each
+    other's vectors and a failure cannot strand points that make the next run
+    pass — or fail — for the wrong reason.
+    """
+    import re
+    import uuid
+
+    from backend.config.settings import get_settings
+    from vector_db.qdrant.client import build_qdrant_client
+    from vector_db.qdrant.config import QdrantConfig
+    from vector_db.qdrant.repository import QdrantVectorStore
+
+    safe = re.sub(r"[^A-Za-z0-9_]", "_", request.node.name)[:60]
+    config = QdrantConfig.from_settings(get_settings())
+    config = dataclasses.replace(
+        config, collection_name=f"test_{safe}_{uuid.uuid4().hex[:8]}"
+    )
+    client = build_qdrant_client(config)
+    try:
+        yield QdrantVectorStore(client, config)
+    finally:
+        try:
+            await client.delete_collection(config.collection_name)
+        finally:
+            await client.close()
+
+
 def _require_or_skip(
     items: list[pytest.Item],
     *,
@@ -170,7 +251,7 @@ def _require_or_skip(
 
 
 def pytest_collection_modifyitems(config: object, items: list[pytest.Item]) -> None:
-    """Gate `db` tests on PostgreSQL and `redis` tests on Redis."""
+    """Gate each marker on the service or model its tests genuinely need."""
     db_items = [item for item in items if item.get_closest_marker("db")]
     if db_items:
         dsn_host = os.environ["DATABASE_URL"].rsplit("@", 1)[-1]
@@ -190,6 +271,26 @@ def pytest_collection_modifyitems(config: object, items: list[pytest.Item]) -> N
             required_by="REQUIRE_REDIS",
             what="Redis",
             how_to_start="docker compose up -d redis",
+        )
+
+    qdrant_items = [item for item in items if item.get_closest_marker("qdrant")]
+    if qdrant_items:
+        _require_or_skip(
+            qdrant_items,
+            reachable=_qdrant_is_reachable(),
+            required_by="REQUIRE_QDRANT",
+            what="Qdrant",
+            how_to_start="docker compose up -d qdrant",
+        )
+
+    model_items = [item for item in items if item.get_closest_marker("embeddings")]
+    if model_items:
+        _require_or_skip(
+            model_items,
+            reachable=_embedding_model_is_available(),
+            required_by="REQUIRE_EMBEDDINGS",
+            what="the embedding model",
+            how_to_start="poetry run python scripts/fetch-embedding-model.py",
         )
 
 

@@ -59,6 +59,7 @@ anyio = "^4.0"
 arq = "^0.28.0"
 structlog = "^24.2.0"
 httpx = "^0.27.0"
+fastembed = "^0.7"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"

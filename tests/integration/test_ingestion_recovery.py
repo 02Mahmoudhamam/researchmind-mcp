@@ -38,18 +38,23 @@ from backend.ingestion.worker import ingest_document, recover_pending_documents
 from backend.services.document_service import DocumentService
 from backend.services.ingestion_service import IngestionService
 from backend.storage import LocalStorage
-from document_processing.chunker import SectionAwareChunker
+from document_processing.chunker import STRATEGY_VERSION, SectionAwareChunker
 from document_processing.pdf_parser import PyMuPDFTextExtractor
-from document_processing.tokenization import RegexTokenizer
+from document_processing.tokenization import RegexTokenizer, TOKENIZER_ID
 from shared.interfaces.storage import StorageError, document_storage_key
 from shared.models.document import DocumentType
 from shared.models.ingestion import IngestionJob, RecoveryResult
 from shared.models.principal import Principal
 from tests.pdfs import make_pdf
+from tests.doubles import InMemoryVectorStore, StubEmbeddingProvider
 
 pytestmark = [
     pytest.mark.db,
     pytest.mark.redis,
+    # Some of these run a real `arq` worker, whose startup since M3/S3.5 loads
+    # the embedding model and prepares the collection.
+    pytest.mark.embeddings,
+    pytest.mark.qdrant,
     pytest.mark.usefixtures("engine_isolation", "migrated_schema"),
 ]
 
@@ -147,6 +152,10 @@ def _service(session: Any, root: Path) -> IngestionService:
         LocalStorage(root),
         extractor=PyMuPDFTextExtractor(timeout_seconds=60, max_concurrency=4),
         chunker=SectionAwareChunker(RegexTokenizer(), chunk_size=400, chunk_overlap=60),
+        embedder=StubEmbeddingProvider(),
+        vectors=InMemoryVectorStore(),
+        strategy_version=STRATEGY_VERSION,
+        tokenizer_id=TOKENIZER_ID,
         max_pages=get_settings().MAX_PDF_PAGES,
     )
 
@@ -378,6 +387,10 @@ class TestParsedDocumentsAreRecoveredToo:
                 LocalStorage(root),
                 extractor=PyMuPDFTextExtractor(timeout_seconds=60, max_concurrency=4),
                 chunker=Failing(),
+                embedder=StubEmbeddingProvider(),
+                vectors=InMemoryVectorStore(),
+                strategy_version=STRATEGY_VERSION,
+                tokenizer_id=TOKENIZER_ID,
                 max_pages=get_settings().MAX_PDF_PAGES,
             )
             with pytest.raises(Exception):
@@ -406,14 +419,49 @@ class TestParsedDocumentsAreRecoveredToo:
         payload = (await _queued())[ingestion_job_id(job.document_id)]
         assert payload == job.model_dump(mode="json")
 
-    async def test_a_chunked_document_is_left_alone(
+    async def test_a_chunked_document_is_recovered_too(
         self, committing_session: Any, storage_root: Path
     ) -> None:
+        """Inverted by M3/S3.5, and deliberately.
+
+        Until S3.5 `chunked` was where the pipeline stopped, so a sweep that
+        requeued one would have handed a worker nothing to do. Now it is the
+        status the embed stage starts from, and a document stranded there is as
+        stuck as a `parsed` one — the same argument that added `parsed` in
+        S3.4, applied to the stage S3.5 adds.
+        """
         job = await _uploaded(committing_session, storage_root)
         await _sql(
             committing_session,
             "UPDATE documents SET status = 'chunked' WHERE id = :id",
             id=uuid.UUID(job.document_id),
+        )
+
+        result = await _sweep(storage_root)
+
+        assert result.requeued == (job.document_id,)
+        assert await _queued() != {}
+
+    @pytest.mark.parametrize(
+        ("status", "reason"),
+        [("ready", None), ("failed", "unknown"), ("processing", None)],
+    )
+    async def test_a_document_no_stage_advances_is_left_alone(
+        self,
+        committing_session: Any,
+        storage_root: Path,
+        status: str,
+        reason: str | None,
+    ) -> None:
+        """`processing` is the reaper's; `ready` and `failed` are terminal."""
+        job = await _uploaded(committing_session, storage_root)
+        await _sql(
+            committing_session,
+            "UPDATE documents SET status = :status, failure_reason = :reason"
+            " WHERE id = :id",
+            id=uuid.UUID(job.document_id),
+            status=status,
+            reason=reason,
         )
 
         result = await _sweep(storage_root)
@@ -475,7 +523,7 @@ class TestParsedDocumentsAreRecoveredToo:
         finally:
             await worker.close()
 
-        assert await _status(job.document_id) == ("chunked", None)
+        assert await _status(job.document_id) == ("ready", None)
 
 
 class TestConcurrentSweeps:
@@ -570,7 +618,7 @@ class TestTheWorker:
 
         assert storage.gets == 1, "the recovered job ran exactly once"
         assert worker.jobs_complete >= 2  # the cron pass, and the recovered job
-        assert await _status(job.document_id) == ("chunked", None)
+        assert await _status(job.document_id) == ("ready", None)
 
     async def test_a_final_attempt_that_gives_up_records_the_failure(
         self,

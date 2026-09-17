@@ -10,6 +10,8 @@ Frozen, and ordered by `chunk_index`: the same pages, configuration, tokenizer
 and strategy must produce the same chunks, in the same order, every time.
 """
 
+import uuid
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
@@ -66,3 +68,38 @@ class ChunkingResult(BaseModel):
     # produces them that way and its own tests say so; the database refuses
     # duplicates through `uq_document_chunks_document_id_chunk_index`. A model
     # that refused them first would stop the repository tests proving that.
+
+
+# The namespace for derived chunk ids. A fixed, arbitrary UUID — it never
+# changes, because changing it would change every id derived from it.
+CHUNK_ID_NAMESPACE = uuid.UUID("6f1a2d4e-9b3c-5a7d-8e0f-1c2b3a4d5e6f")
+
+
+def chunk_id_for(
+    *,
+    document_id: str,
+    chunk_index: int,
+    strategy_version: str,
+    tokenizer_id: str,
+) -> uuid.UUID:
+    """The id of one chunk, derived rather than drawn (ADR-0013 §4).
+
+    A chunk's id is also its Qdrant point id, so deriving it is what makes the
+    whole pipeline idempotent: re-running the embed stage after a crash, a
+    duplicate delivery or a partial upsert writes the *same* points and
+    overwrites them, instead of leaving a second vector for every chunk.
+
+    The four inputs are exactly what determines a chunk's content. The document
+    and the index place it; the strategy and tokenizer decide where its
+    boundaries fall, so a change to either must produce different ids — which is
+    why re-chunking deletes the old vectors rather than leaving them to collide
+    with ids that no longer match.
+
+    Deliberately *not* derived from the content: two identical chunks in one
+    document would collide, and a re-chunk that changed nothing but whitespace
+    would churn every id after it.
+    """
+    return uuid.uuid5(
+        CHUNK_ID_NAMESPACE,
+        f"{document_id}|{chunk_index}|{strategy_version}|{tokenizer_id}",
+    )

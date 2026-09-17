@@ -22,6 +22,7 @@ supersedes the old one, so the reasoning history stays intact.
 | [0010](0010-per-owner-idempotent-upload.md) | Per-owner idempotent upload over content-addressed storage | Proposed |
 | [0011](0011-pdf-text-extraction-stage.md) | PDF text extraction: a `parsed` stage, per-page storage, a killable parser | Proposed |
 | [0012](0012-section-aware-chunking.md) | Section-aware chunking: a `chunked` stage, a tokenizer seam, and chunk provenance | Accepted |
+| [0013](0013-embedding-pipeline-and-vector-store.md) | The embedding stage: an authoritative tokenizer, versioned re-chunking, and vectors before READY | Proposed |
 
 ## Statuses
 

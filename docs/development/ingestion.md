@@ -3,7 +3,8 @@
 M3/S3.2, extended by M3/S3.3 and M3/S3.4. What happens to an uploaded document
 after `POST /api/v1/documents/upload` has answered 202 — and, as importantly,
 what does not happen yet. The stages themselves are
-[pdf-extraction.md](pdf-extraction.md) and [chunking.md](chunking.md).
+[pdf-extraction.md](pdf-extraction.md), [chunking.md](chunking.md) and
+[embeddings.md](embeddings.md).
 
 ```text
 upload request                                  worker process
@@ -23,8 +24,11 @@ validate → store → INSERT … COMMIT
                                                    │ PdfTextExtractor (S3.3)
                                                    │ pages + `parsed` committed
                                                    │ DocumentChunker  (S3.4)
+                                                   │ chunks + `chunked` committed
+                                                   │ EmbeddingProvider (S3.5)
+                                                   │ VectorStore.upsert
                                                    ▼
-                                                 chunks + `chunked` committed,
+                                                 `ready` committed,
                                                  then returned
 
                                      cron, every minute: recover_pending_documents
@@ -43,6 +47,8 @@ ADR-0009 is the decision. The code:
 | [backend/db/repositories/document_page.py](../../backend/db/repositories/document_page.py) | Extracted pages, owner-scoped through the document (S3.3) |
 | [document_processing/pdf_parser.py](../../document_processing/pdf_parser.py) | `PyMuPDFTextExtractor` — see [pdf-extraction.md](pdf-extraction.md) |
 | [document_processing/chunker.py](../../document_processing/chunker.py) | `SectionAwareChunker` — see [chunking.md](chunking.md) |
+| [document_processing/embedder.py](../../document_processing/embedder.py) | `FastEmbedProvider` and its tokenizer — see [embeddings.md](embeddings.md) |
+| [vector_db/qdrant/repository.py](../../vector_db/qdrant/repository.py) | `QdrantVectorStore` — the only module that speaks Qdrant |
 | [backend/db/repositories/document_chunk.py](../../backend/db/repositories/document_chunk.py) | Chunks, owner-scoped through the document (S3.4) |
 
 ## Running it
@@ -60,22 +66,25 @@ ADR-0009 §1 requires. It must see the same `STORAGE_ROOT`, `DATABASE_URL` and
 ## Status lifecycle
 
 ADR-0009 §4: `PENDING → PROCESSING → READY | FAILED`, with the failure reason
-persisted — and, since S3.3, a `parsed` stage between (ADR-0011).
+persisted — and, since S3.3 and S3.4, `parsed` and `chunked` stages between
+(ADR-0011, ADR-0012).
 
 | Status | Meaning | Set by |
 |---|---|---|
 | `pending` | Recorded; no stage has completed, none is running | Upload. The worker, releasing a claim to retry |
 | `processing` | A delivery holds the claim | The worker's claim |
 | `parsed` | Text extracted and stored; not chunked, embedded or searchable | The worker, with the pages, in one transaction (S3.3) |
-| `chunked` | Split into section-aware chunks and stored; still not searchable | The worker, with the chunks, in one transaction (S3.4) |
-| `ready` | Processed and searchable | **Nothing yet** |
+| `chunked` | Split into section-aware chunks and stored; not yet searchable | The worker, with the chunks, in one transaction (S3.4) |
+| `ready` | Embedded, vectors persisted — searchable | The worker, **after** the upsert returns (S3.5) |
 | `failed` | Can never be processed; `failure_reason` says why | The worker, the reaper |
 
-**Nothing sets `ready`.** `ready` means searchable — the M3 definition of done
-is "poll until ready, then search", and nothing embeds yet. S3.2 released a
-verified document back to `pending`, S3.3 parses it, S3.4 chunks it, and each
-status says exactly that much and no more. A test
-(`test_it_never_sets_ready`) and mutations hold this.
+**`ready` means the vectors are in the store.** The M3 definition of done is
+"poll until ready, then search", so `ready` is committed *after* the vector
+store has accepted the upsert and nowhere else (ADR-0013 §3). The reverse order
+would allow `ready` with no vectors — the one state a client cannot detect. A
+test (`test_ready_is_set_only_after_the_vectors_are_written`) and mutations hold
+this; until S3.5 the same place held the opposite, that nothing set `ready` at
+all. See [embeddings.md](embeddings.md).
 
 **`failed` replaces `error`** (migration `0004`). ADR-0009 names the terminal
 state `FAILED`; S3.1 had left `DocumentStatus.ERROR` for the first sprint that set
@@ -102,9 +111,11 @@ PostgreSQL rather than by convention.
 4. **Check the job against the row** — owner, content hash, storage key, MIME
    type. A disagreement *rejects the job* and leaves the document untouched: it
    is the job that is wrong, not the owner's document.
-5. **Check the state.** `processing` → another delivery holds it; `chunked` →
-   this job's work is done; `ready` or `failed` → terminal. Nothing is done. A
-   `pending` document is parsed and then chunked; a `parsed` one is chunked.
+5. **Check the state.** `processing` → another delivery holds it; `ready` or
+   `failed` → terminal. Nothing is done. Otherwise the delivery runs every
+   stage the document is ready for: a `pending` one is parsed, chunked and
+   embedded; a `parsed` one is chunked and embedded; a `chunked` one is
+   embedded.
 6. **Claim**: `pending → processing`, a conditional `UPDATE`, committed. The
    claim comes before the bytes are read, so concurrent deliveries never read,
    hash or parse the same document.
@@ -116,8 +127,13 @@ PostgreSQL rather than by convention.
    transaction, committed.
 10. **Chunk** (S3.4): claim `parsed → processing`, read the pages back
     owner-scoped, chunk them, and store the chunks with `processing → chunked`
-    in one transaction. Only then does the task return — ARQ never records
-    success for state that is not durable.
+    in one transaction.
+11. **Embed** (S3.5): claim `chunked → processing`; re-chunk first if the
+    stored chunks were sized by a strategy or tokenizer this pipeline no longer
+    produces; embed the chunk text holding no transaction; upsert the vectors;
+    and only then commit `processing → ready` with the model recorded on every
+    chunk. Only then does the task return — ARQ never records success for state
+    that is not durable.
 
 Each stage is its own claim, transaction and retry, and releases its claim back
 to the status it started from, so a retry repeats the stage that failed.
@@ -129,11 +145,11 @@ Returned by the task (and so visible in worker logs), one per delivery:
 | Outcome | When | Document afterwards |
 |---|---|---|
 | `parsed` | Verified, extracted, pages stored (S3.3) — returned only when the delivery stops there | `parsed` |
-| `chunked` | Chunked and stored (S3.4) | `chunked` |
+| `chunked` | Chunked and stored (S3.4) — an internal stage result; a delivery carries on to embedding | `chunked` |
+| `ready` | Embedded and the vectors persisted (S3.5) | `ready` |
 | `failed` | Permanent failure, or transient on the last attempt | `failed` + reason |
 | `rejected` | Payload invalid, or job disagrees with the database | unchanged |
 | `skipped_in_progress` | Another delivery holds the claim, or won the race for it | unchanged |
-| `skipped_chunked` | Already `chunked` | unchanged |
 | `skipped_terminal` | Already `ready` or `failed` | unchanged |
 | `claim_lost` | The claim was taken away mid-run (by the reaper) | whatever replaced it — never overwritten |
 
@@ -152,6 +168,8 @@ trace or infrastructure detail is ever persisted.
 | `pdf_open_failed`, `pdf_encrypted`, `page_limit_exceeded`, `pdf_parse_failed`, `pdf_timeout`, `page_count_mismatch`, `no_extractable_text` | yes — see [pdf-extraction.md](pdf-extraction.md#failures) | **never** |
 | `parser_unavailable` | on the last attempt | yes — the extraction process died |
 | `no_extracted_pages`, `no_chunks_produced` | yes — see [chunking.md](chunking.md#failures) | **never** |
+| `no_chunks_to_embed`, `embedding_dimension_mismatch` | yes — see [embeddings.md](embeddings.md#failures) | **never** |
+| `embedding_failure`, `vector_store_failure` | yes — see [embeddings.md](embeddings.md#failures) | yes |
 | `chunking_failure` | on the last attempt | yes — the chunker or the write failed |
 | `stale_processing` | yes — by the reaper | n/a |
 | `invalid_job`, `document_not_found`, `ownership_mismatch`, `storage_key_mismatch`, `mime_type_mismatch` | **no** — the job is rejected, the document untouched | **never** |
@@ -194,14 +212,17 @@ always possible. Three layers, the last of which is the guarantee:
    writes in one WATCH/MULTI transaction. `keep_result = 0`, so once a job
    finishes the id is free again rather than blocked for the result's lifetime;
    the recovery sweep depends on that.
-2. **State pre-check** (step 5): a redelivery of a parsed or finished document
-   is a no-op.
+2. **State pre-check** (step 5): a redelivery of a claimed or finished document
+   is a no-op. Since S3.5 a `chunked` one is not finished — it is embedded.
 3. **Compare-and-set claim**: `UPDATE … WHERE status = 'pending'`. Under
    concurrent deliveries exactly one row update succeeds; tests run deliveries
    concurrently and assert at most one ever reads storage, and exactly one
    parses.
-4. **The pages' primary key** `(document_id, page_number)`: even a defect that
-   let two deliveries through could not store a document's text twice.
+4. **The pages' primary key** `(document_id, page_number)`, the chunks'
+   `(document_id, chunk_index)`, and since S3.5 the **derived point id**: even a
+   defect that let two deliveries through could not store a document's text
+   twice, and a second upsert of the same chunk overwrites one point rather
+   than creating another (ADR-0013 §4).
 
 Every transition is conditional on the status it expects, so a delivery whose
 claim was reaped cannot write `pending` or `failed` over the reaper's decision.
@@ -217,11 +238,11 @@ Nothing looked at those documents again.
 - `recover_pending_documents`, a cron job every minute on the half-minute and
   **once at worker startup**, `unique=True`.
 - Selects live documents **with stored content** (storage key, hash and type
-  all set) in a status a stage can still advance — `pending` and, since S3.4,
-  `parsed` — oldest `updated_at` first, at most 500 a pass
-  (`RECOVERY_BATCH_SIZE`). Never `processing`: that claim is the reaper's, and
-  the repository refuses to be asked for it. Never `chunked`, `ready` or
-  `failed`, never deleted, never a row from before upload existed.
+  all set) in a status a stage can still advance — `pending`, and since S3.4
+  `parsed`, and since S3.5 `chunked` — oldest `updated_at` first, at most 500 a
+  pass (`RECOVERY_BATCH_SIZE`). Never `processing`: that claim is the reaper's,
+  and the repository refuses to be asked for it. Never `ready` or `failed`,
+  never deleted, never a row from before upload existed.
 - Builds each job **from the row**: its own `user_id`, storage key, hash and
   type. There is no request to take anything from. A row whose storage key is
   not what its owner and hash derive to is **skipped and logged**
@@ -329,10 +350,12 @@ neither.
 
 ## Not done
 
-- **Nothing takes a `chunked` document further.** Embedding is M4's: it must
-  claim `chunked → processing`, release back to `chunked` on a transient
-  failure, extend the recovery sweep to `chunked` documents with no job, and
-  only then set `ready`.
+- **Retrieval.** M4's: the vectors exist and are owner-filtered, but nothing
+  searches them through an API, and ADR-0003 §5's second layer — re-validating
+  returned chunk ids against PostgreSQL — is not built.
+- **Deleting a document leaves its vectors.** ADR-0003 §6 is still
+  half-implemented; `VectorStore.delete_document` exists and the API's delete
+  path does not call it.
 - ~~A job cancelled by timeout is not retried~~ and ~~verified documents are
   never picked up again~~ — **closed in S3.3** by the recovery sweep. Every
   upload verified by S3.2 is `pending` and is swept up and parsed.

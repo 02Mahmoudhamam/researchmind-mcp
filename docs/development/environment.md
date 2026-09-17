@@ -112,10 +112,26 @@ uses — not a second one.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `CHUNK_SIZE_TOKENS` | `400` | Tokens per chunk — ADR-005's "~400 tokens". Counted by the chunker's tokenizer (currently the provisional `regex-word/v1`), **not** an embedding model's |
+| `CHUNK_SIZE_TOKENS` | `400` | Tokens per chunk — ADR-005's "~400 tokens". Since M3/S3.5 counted by the **embedding model's own tokenizer**; the worker refuses to start unless this plus 2 special tokens fits the model's 512-token input |
 | `CHUNK_OVERLAP_TOKENS` | `60` | Tokens shared with the previous chunk — ADR-005's "~15% overlap". Must be ≥ 0 and **less than `CHUNK_SIZE_TOKENS`**, or the windows would not advance |
 
 See [chunking.md](chunking.md). Reference chunks ignore the overlap by design.
+
+### Optional — embeddings and retrieval (M3/S3.5)
+
+| Variable | Default | Notes |
+|---|---|---|
+| `EMBEDDING_PROVIDER` | `fastembed` | The only implemented provider (ADR-0004). Anything else is refused at startup rather than silently substituted |
+| `EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | 384 dimensions, 512 input tokens. Must not be blank |
+| `EMBEDDING_BATCH_SIZE` | `32` | Texts per call into the model. Must be positive |
+| `EMBEDDING_CACHE_DIR` | unset | Where the weights live. The image sets `/app/.fastembed_cache` and bakes them in, so no container downloads them |
+| `RETRIEVAL_TOP_K` | `10` | Validated here; used by retrieval in M4 |
+| `RETRIEVAL_SCORE_THRESHOLD` | `0.7` | Must be between 0 and 1 |
+| `QDRANT_TIMEOUT_SECONDS` | `30` | Must be positive |
+
+**There is no dimension variable, deliberately.** ADR-0005 makes it a property
+of the active provider: the collection is created from `provider.dimension` and
+a literal cannot drift from the model. See [embeddings.md](embeddings.md).
 
 The API and the worker read the same variables — including `STORAGE_ROOT`,
 `DATABASE_URL` and `REDIS_*`, which must agree between them. Under
@@ -130,7 +146,10 @@ The API and the worker read the same variables — including `STORAGE_ROOT`,
 | `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` / `REDIS_TTL` | `localhost` / `6379` / `0` / `86400` |
 
 Redis carries the ingestion queue since M3/S3.2. Tests use `REDIS_DB=15`
-(`tests/conftest.py`) and flush it, so a developer's database 0 is never touched.
+(`tests/conftest.py`) and flush it, so a developer's database 0 is never
+touched. Qdrant holds the vectors since M3/S3.5; tests set
+`QDRANT_COLLECTION=researchmind_test` and each one builds and drops a
+uniquely-named collection inside it, so `researchmind` is never touched.
 
 ### Optional — PostgreSQL *(added in M1/S1.1)*
 
@@ -197,8 +216,6 @@ Documented so the configuration surface is predictable. **Not yet present in
 
 | Variable | Milestone | Purpose | ADR |
 |---|---|---|---|
-| `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_BATCH_SIZE` | M4 | Embedding provider | [0004](../adr/0004-local-fastembed-embeddings.md) |
-| `RETRIEVAL_TOP_K`, `RETRIEVAL_SCORE_THRESHOLD` | M4 | Retrieval tuning | [0005](../adr/0005-provider-derived-embedding-dimension.md) |
 | `CLAUDE_MODEL`, `LLM_TIMEOUT_SECONDS`, `LLM_MAX_RETRIES` | M5 | Generation | [0006](../adr/0006-single-research-agent.md) |
 | `RATE_LIMIT_*` | M9 | Rate limiting | — |
 

@@ -27,12 +27,20 @@ from backend.db.session import get_sessionmaker
 from backend.ingestion.queue import PooledArqIngestionQueue
 from backend.services.ingestion_service import IngestionService, TransientIngestionError
 from backend.storage import LocalStorage
-from document_processing.chunker import SectionAwareChunker
+from document_processing.chunker import STRATEGY_VERSION, SectionAwareChunker
+from document_processing.embedder import (
+    SPECIAL_TOKENS_PER_SEQUENCE,
+    FastEmbedProvider,
+)
 from document_processing.pdf_parser import PyMuPDFTextExtractor
-from document_processing.tokenization import RegexTokenizer
 from shared.interfaces.chunking import DocumentChunker
+from shared.interfaces.embedding import EmbeddingProvider
 from shared.interfaces.pdf_extraction import PdfTextExtractor
 from shared.interfaces.storage import Storage
+from shared.interfaces.vector_store import VectorStore
+from vector_db.qdrant.client import build_qdrant_client
+from vector_db.qdrant.config import QdrantConfig
+from vector_db.qdrant.repository import QdrantVectorStore
 from shared.models.ingestion import (
     IngestionJob,
     IngestionOutcome,
@@ -57,6 +65,31 @@ RECOVERY_BATCH_SIZE = 500
 def retry_delay_seconds(job_try: int) -> int:
     """How long to wait before the retry that follows attempt `job_try`."""
     return RETRY_DELAYS_SECONDS[min(max(job_try, 1), len(RETRY_DELAYS_SECONDS)) - 1]
+
+
+def refuse_chunks_the_model_cannot_read(
+    chunk_size: int, provider: EmbeddingProvider
+) -> None:
+    """Fail startup if a chunk could not fit inside what the model reads.
+
+    A chunk plus the special tokens the model adds to every sequence must fit
+    `max_input_tokens`. Over that the model truncates, and the tail of every
+    long chunk is embedded as though it were not there — silently, with a
+    vector that looks perfectly valid. The worker refuses to start instead
+    (ADR-0013 §1), because a configuration that quietly discards text is worse
+    than one that will not boot.
+
+    Its own function rather than four lines inside `startup`, so it can be
+    asserted without a model, a database and a Redis.
+    """
+    budget = chunk_size + SPECIAL_TOKENS_PER_SEQUENCE
+    if budget > provider.max_input_tokens:
+        raise RuntimeError(
+            f"CHUNK_SIZE_TOKENS={chunk_size} plus {SPECIAL_TOKENS_PER_SEQUENCE} "
+            f"special tokens exceeds the {provider.max_input_tokens} tokens "
+            f"{provider.model_id} reads; chunks would be truncated before they "
+            "were embedded"
+        )
 
 
 async def startup(ctx: dict[str, Any]) -> None:
@@ -84,18 +117,50 @@ async def startup(ctx: dict[str, Any]) -> None:
         max_concurrency=settings.ARQ_MAX_JOBS,
     )
     ctx["extractor"] = extractor
-    # The chunker is stateless and pure; its tokenizer is the provisional one
-    # (ADR-0012 §2), and both are named only here.
+    # The embedding model, loaded once per worker process. Seconds of work and,
+    # on a cold cache, a download — so it happens at startup, never inside a
+    # job, and the image carries the weights (ADR-0004 §2).
+    embedder: EmbeddingProvider = FastEmbedProvider(
+        settings.EMBEDDING_MODEL,
+        cache_dir=settings.EMBEDDING_CACHE_DIR,
+        batch_size=settings.EMBEDDING_BATCH_SIZE,
+    )
+    ctx["embedder"] = embedder
+
+    refuse_chunks_the_model_cannot_read(settings.CHUNK_SIZE_TOKENS, embedder)
+
+    # The chunker is stateless and pure. Since M3/S3.5 it counts with the
+    # embedding model's own tokenizer, so the ruler that sizes a chunk is the
+    # one that reads it (ADR-0013 §1). Named only here.
     chunker: DocumentChunker = SectionAwareChunker(
-        RegexTokenizer(),
+        embedder.tokenizer,
         chunk_size=settings.CHUNK_SIZE_TOKENS,
         chunk_overlap=settings.CHUNK_OVERLAP_TOKENS,
     )
     ctx["chunker"] = chunker
+    ctx["strategy_version"] = STRATEGY_VERSION
+    ctx["tokenizer_id"] = embedder.tokenizer.id
+
+    # The vector store, and the collection built to this model's width. Asserted
+    # at startup so a model change meets a clear error here rather than a
+    # refused upsert inside a job (ADR-0005 §2).
+    qdrant_config = QdrantConfig.from_settings(settings)
+    client = build_qdrant_client(qdrant_config)
+    ctx["qdrant_client"] = client
+    vectors: VectorStore = QdrantVectorStore(client, qdrant_config)
+    await vectors.ensure_collection(dimension=embedder.dimension)
+    ctx["vectors"] = vectors
+
     ctx["max_pdf_pages"] = settings.MAX_PDF_PAGES
     ctx["ingest_max_tries"] = settings.INGEST_MAX_TRIES
     ctx["stale_processing_seconds"] = settings.INGEST_STALE_PROCESSING_SECONDS
-    _log.info("ingestion.worker.started")
+    _log.info(
+        "ingestion.worker.started",
+        embedding_model_id=embedder.model_id,
+        dimension=embedder.dimension,
+        tokenizer_id=embedder.tokenizer.id,
+        collection=qdrant_config.collection_name,
+    )
 
 
 def _service(ctx: dict[str, Any], session: AsyncSession) -> IngestionService:
@@ -105,11 +170,20 @@ def _service(ctx: dict[str, Any], session: AsyncSession) -> IngestionService:
         ctx["storage"],
         extractor=ctx["extractor"],
         chunker=ctx["chunker"],
+        embedder=ctx["embedder"],
+        vectors=ctx["vectors"],
         max_pages=int(ctx["max_pdf_pages"]),
+        strategy_version=str(ctx["strategy_version"]),
+        tokenizer_id=str(ctx["tokenizer_id"]),
     )
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:
+    client = ctx.get("qdrant_client")
+    if client is not None:
+        # Closed here because it was opened here: the client holds this loop's
+        # connection pool, and this is the loop shutting down.
+        await client.close()
     await dispose_engine()
     _log.info("ingestion.worker.stopped")
 

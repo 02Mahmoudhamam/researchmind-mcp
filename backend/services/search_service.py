@@ -1,15 +1,21 @@
 """Semantic search service."""
 
-from document_processing.embedder import EmbeddingGenerator
-from vector_db.qdrant.repository import QdrantVectorRepository
+from shared.interfaces.embedding import EmbeddingProvider
+from shared.interfaces.vector_store import VectorStore
 from shared.models.document import SearchResult
 from typing import List, Optional
 
 
 class SearchService:
     def __init__(self):
-        self._embedder = EmbeddingGenerator()
-        self._vector_store = QdrantVectorRepository()
+        # TODO(M4): the query must be embedded by the same provider that
+        # embedded the documents (ADR-0005 §5), injected rather than built
+        # here — searching with a second model compares two vector spaces.
+        self._embedder: EmbeddingProvider | None = None
+        # TODO(M4): inject a `VectorStore`. Its `search` requires an
+        # `owner_id`, which this stub has no way to obtain — the signature
+        # below takes no `Principal`, and M4 must add one.
+        self._vector_store: VectorStore | None = None
 
     async def search(
         self,

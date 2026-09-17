@@ -34,6 +34,12 @@ venv/
 ENV/
 env/
 
+# --- Embedding model weights -----------------------------------------------
+# The image fetches these itself (Dockerfile.backend). Copying a developer's or
+# CI's cache in would make the image depend on host state rather than on the
+# model the build asked for.
+.fastembed_cache/
+
 # --- Test, type & lint caches ----------------------------------------------
 .pytest_cache/
 .mypy_cache/

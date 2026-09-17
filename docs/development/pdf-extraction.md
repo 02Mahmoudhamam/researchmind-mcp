@@ -157,7 +157,8 @@ by pipe.
 - **No OCR**, so scans fail as `no_extractable_text`.
 - **No dehyphenation**: a word broken across lines stays broken.
 - ~~No section detection or chunking~~ — **done in M3/S3.4**, from
-  `document_pages`; see [chunking.md](chunking.md). Embeddings remain M4's.
+  `document_pages`; see [chunking.md](chunking.md) and, since M3/S3.5,
+  [embeddings.md](embeddings.md).
 - **PDF metadata** (title, author) is not read. `documents.metadata` is
   untouched.
 - **No extraction version is recorded.** If the ordering or cleaning rules

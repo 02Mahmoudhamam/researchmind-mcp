@@ -20,6 +20,15 @@ RUN pip install --no-cache-dir poetry && poetry install --only main --no-interac
 
 COPY . .
 
+# Bake the embedding model into the image (ADR-0004 §2). Without this the first
+# job to embed downloads 67 MB while a document waits, every replica downloads
+# it separately, and a worker started without network access fails at its first
+# document rather than at boot. EMBEDDING_CACHE_DIR is set here so the fetch
+# below and the running container agree on where the weights are; compose sets
+# the same value for the worker.
+ENV EMBEDDING_CACHE_DIR=/app/.fastembed_cache
+RUN python scripts/fetch-embedding-model.py
+
 EXPOSE 8000
 
 CMD ["python", "main.py"]

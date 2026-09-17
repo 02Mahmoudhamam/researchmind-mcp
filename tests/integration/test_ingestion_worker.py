@@ -49,6 +49,11 @@ from tests.pdfs import make_pdf
 pytestmark = [
     pytest.mark.db,
     pytest.mark.redis,
+    # Since M3/S3.5 `worker.startup()` loads the embedding model and prepares
+    # the collection, so these tests exercise the real composition root — the
+    # whole point of running the real `arq` worker here rather than a stand-in.
+    pytest.mark.embeddings,
+    pytest.mark.qdrant,
     pytest.mark.usefixtures("engine_isolation", "migrated_schema"),
 ]
 
@@ -267,7 +272,7 @@ class TestUploadThroughTheWorker:
         worker = await _run_worker()
 
         assert (worker.jobs_complete, worker.jobs_failed) == (1, 0)
-        assert await _status(document_id) == ("chunked", None)
+        assert await _status(document_id) == ("ready", None)
         assert await _queued_job_ids() == []
 
     async def test_a_tampered_upload_fails_in_the_worker(
@@ -344,7 +349,7 @@ class TestTheWorkerTask:
 
         assert worker.jobs_retried == 2
         assert flaky.gets == 3
-        assert await _status(job.document_id) == ("chunked", None)
+        assert await _status(job.document_id) == ("ready", None)
 
     async def test_retries_end_in_a_terminal_failure_not_an_endless_loop(
         self, committing_session: Any, storage_root: Path
@@ -430,7 +435,7 @@ class TestTheChunkStage:
         worker = await _run_worker()
 
         assert (worker.jobs_complete, worker.jobs_failed) == (1, 0)
-        assert await _status(job.document_id) == ("chunked", None)
+        assert await _status(job.document_id) == ("ready", None)
         async with get_sessionmaker()() as session:
             rows = (
                 await session.execute(
@@ -464,7 +469,7 @@ class TestTheChunkStage:
         worker = await _run_worker()
 
         assert worker.jobs_failed == 0
-        assert await _status(job.document_id) == ("chunked", None)
+        assert await _status(job.document_id) == ("ready", None)
         async with get_sessionmaker()() as session:
             after = (
                 await session.execute(
