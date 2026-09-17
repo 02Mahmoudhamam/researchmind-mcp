@@ -51,6 +51,9 @@ class StubEmbeddingProvider:
         self.max_input_tokens = max_input_tokens
         self._tokenizer = tokenizer or RegexTokenizer()
         self.embedded: list[tuple[str, ...]] = []
+        # What `embed_query` was handed, so a test can assert the query was
+        # normalised and stripped before it reached the model.
+        self.queries: list[str] = []
 
     @property
     def tokenizer(self) -> Tokenizer:
@@ -65,6 +68,7 @@ class StubEmbeddingProvider:
 
     async def embed_query(self, text: str) -> Vector:
         self._refuse_empty([text])
+        self.queries.append(text)
         return self._vector(text)
 
     def _vector(self, text: str) -> Vector:

@@ -28,14 +28,16 @@ class DocumentStatus(str, Enum):
                  not yet embedded, so still not searchable (M3/S3.4)
     * READY      processed and available downstream — per ADR-0009, the M3
                  definition of done ("poll until ready, then search") and the
-                 project vision, chunked, embedded and searchable. Nothing
-                 produces it yet.
+                 project vision, chunked, embedded and searchable. Set by the
+                 ingestion worker, and only after the vectors are persisted
+                 (M3/S3.5, ADR-0013 §3). It is the only status retrieval will
+                 return (M4/S4.1, ADR-0014 §3).
     * FAILED     permanently unprocessable; `failure_reason` says why
 
     PARSED and CHUNKED exist because READY must keep meaning "searchable": a
     client that polls for READY and then searches cannot be told READY for a
-    document with no chunks, or with chunks nothing has embedded. Embedding and
-    READY are M4's (ADR-0011, ADR-0012).
+    document with no chunks, or with chunks nothing has embedded (ADR-0011,
+    ADR-0012).
 
     FAILED replaced the scaffold's ERROR in M3/S3.2 (migration 0004). ADR-0009,
     the accepted decision, names it FAILED; nothing had ever written ERROR.

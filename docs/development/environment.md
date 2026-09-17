@@ -125,13 +125,15 @@ See [chunking.md](chunking.md). Reference chunks ignore the overlap by design.
 | `EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | 384 dimensions, 512 input tokens. Must not be blank |
 | `EMBEDDING_BATCH_SIZE` | `32` | Texts per call into the model. Must be positive |
 | `EMBEDDING_CACHE_DIR` | unset | Where the weights live. The image sets `/app/.fastembed_cache` and bakes them in, so no container downloads them |
-| `RETRIEVAL_TOP_K` | `10` | Validated here; used by retrieval in M4 |
-| `RETRIEVAL_SCORE_THRESHOLD` | `0.7` | Must be between 0 and 1 |
+| `RETRIEVAL_TOP_K` | `10` | How many candidates retrieval asks the index for. Candidates, not results — PostgreSQL validation may drop some (M4/S4.1) |
+| `RETRIEVAL_SCORE_THRESHOLD` | `0.7` | Must be between 0 and 1. A Qdrant **cosine similarity**, not a probability, and not comparable across embedding models |
+| `RETRIEVAL_MAX_QUERY_CHARS` | `2000` | A cheap bound on a query, checked before tokenizing. The real limit is the model's `max_input_tokens`, which the service checks next |
 | `QDRANT_TIMEOUT_SECONDS` | `30` | Must be positive |
 
 **There is no dimension variable, deliberately.** ADR-0005 makes it a property
 of the active provider: the collection is created from `provider.dimension` and
-a literal cannot drift from the model. See [embeddings.md](embeddings.md).
+a literal cannot drift from the model. See [embeddings.md](embeddings.md) and,
+for how the retrieval three are used, [retrieval.md](retrieval.md).
 
 The API and the worker read the same variables — including `STORAGE_ROOT`,
 `DATABASE_URL` and `REDIS_*`, which must agree between them. Under

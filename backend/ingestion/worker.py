@@ -28,13 +28,13 @@ from backend.ingestion.queue import PooledArqIngestionQueue
 from backend.services.ingestion_service import IngestionService, TransientIngestionError
 from backend.storage import LocalStorage
 from document_processing.chunker import STRATEGY_VERSION, SectionAwareChunker
-from document_processing.embedder import (
-    SPECIAL_TOKENS_PER_SEQUENCE,
-    FastEmbedProvider,
-)
+from document_processing.embedder import FastEmbedProvider
 from document_processing.pdf_parser import PyMuPDFTextExtractor
 from shared.interfaces.chunking import DocumentChunker
-from shared.interfaces.embedding import EmbeddingProvider
+from shared.interfaces.embedding import (
+    SPECIAL_TOKENS_PER_SEQUENCE,
+    EmbeddingProvider,
+)
 from shared.interfaces.pdf_extraction import PdfTextExtractor
 from shared.interfaces.storage import Storage
 from shared.interfaces.vector_store import VectorStore

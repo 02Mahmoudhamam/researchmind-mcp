@@ -253,11 +253,14 @@ a real Qdrant for another tenant's vectors and get nothing back.
 
 ## Not done
 
-- **No retrieval API.** `SearchService` is still a stub, and ADR-0003 §5's
-  second layer — re-validating returned chunk ids against PostgreSQL — is M4's.
+- **No retrieval API.** Retrieval itself exists as of M4/S4.1, including
+  ADR-0003 §5's second layer — see [retrieval.md](retrieval.md) — but no HTTP
+  route or MCP tool calls it yet.
 - **No vector deletion on document delete.** ADR-0003 §6 remains
   half-implemented: `delete_document` exists on the store, and the API's delete
-  path does not call it yet. Recorded as deferred in ADR-0013.
+  path does not call it yet. Recorded as deferred in ADR-0013. M4/S4.1 makes it
+  harmless — a deleted document's vectors are dropped at validation — but not
+  fixed.
 - **No reranking, no hybrid search, no query expansion.**
 - **One collection for every tenant**, separated by the payload filter, which is
   what ADR-0003 chose.

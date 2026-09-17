@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from backend.config.settings import Settings
 from backend.ingestion import worker as worker_module
 from backend.ingestion.worker import RETRY_DELAYS_SECONDS, retry_delay_seconds
-from document_processing.embedder import SPECIAL_TOKENS_PER_SEQUENCE
+from shared.interfaces.embedding import SPECIAL_TOKENS_PER_SEQUENCE
 from tests.doubles import StubEmbeddingProvider
 
 

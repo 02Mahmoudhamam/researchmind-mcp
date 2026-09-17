@@ -13,13 +13,13 @@ import unicodedata
 
 import pytest
 
-from document_processing.embedder import (
-    SPECIAL_TOKENS_PER_SEQUENCE,
-    FastEmbedProvider,
-    FastEmbedTokenizer,
-)
+from document_processing.embedder import FastEmbedProvider, FastEmbedTokenizer
 from document_processing.tokenization import TOKENIZER_ID, RegexTokenizer
-from shared.interfaces.embedding import EmbeddingError, EmbeddingProvider
+from shared.interfaces.embedding import (
+    SPECIAL_TOKENS_PER_SEQUENCE,
+    EmbeddingError,
+    EmbeddingProvider,
+)
 from shared.interfaces.tokenization import Tokenizer
 
 pytestmark = pytest.mark.embeddings

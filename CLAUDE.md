@@ -132,17 +132,19 @@ stub returns the right type). There is **no RAG evaluation of any kind**.
 | Repositories | [backend/db/repositories/](backend/db/repositories/) | **Complete (M1/S1.3)** — user, document, chunk; ownership in the SQL, not in a Python check. M3/S3.1 added the document storage fields and `find_live_by_content_hash_for_user`; M3/S3.2 the worker's owner-scoped read, compare-and-set status transition and stale-claim reaper update; M3/S3.3 `DocumentPageRepository` (extracted pages, owner-scoped through the document) and the recovery sweep's read |
 | Storage | [backend/storage/](backend/storage/), [shared/interfaces/storage.py](shared/interfaces/storage.py) | **Complete (M3/S3.1)** — `Storage` protocol and `LocalStorage`, content-addressed `{user_id}/{sha256}.pdf` (ADR-0008); atomic writes; filename never forms a path |
 | Upload validation | [document_processing/validation.py](document_processing/validation.py) | **Complete (M3/S3.1)** — magic bytes, size cap, page cap, password-protected refusal, filename sanitising. Structure only; parsing is still a stub |
-| Ingestion worker | [shared/models/ingestion.py](shared/models/ingestion.py), [backend/ingestion/](backend/ingestion/), [backend/services/ingestion_service.py](backend/services/ingestion_service.py) | **Complete (M3/S3.2)** — `ArqIngestionQueue`, an ARQ worker and compose service. Verifies each job against the database (owner-scoped) and the stored bytes against their SHA-256, persists `failed` with a reason code, retries transient failures a bounded number of times, reaps stale claims, and re-queues documents no job will pick up (`pending` since M3/S3.3, `parsed` since M3/S3.4). A verified PDF is parsed (S3.3) and chunked (S3.4) by the same delivery and becomes **`chunked`** — never `ready`, which means searchable. See [docs/development/ingestion.md](docs/development/ingestion.md) |
+| Ingestion worker | [shared/models/ingestion.py](shared/models/ingestion.py), [backend/ingestion/](backend/ingestion/), [backend/services/ingestion_service.py](backend/services/ingestion_service.py) | **Complete (M3/S3.2)** — `ArqIngestionQueue`, an ARQ worker and compose service. Verifies each job against the database (owner-scoped) and the stored bytes against their SHA-256, persists `failed` with a reason code, retries transient failures a bounded number of times, reaps stale claims, and re-queues documents no job will pick up (`pending` since M3/S3.3, `parsed` since M3/S3.4, `chunked` since M3/S3.5). A verified PDF is parsed (S3.3), chunked (S3.4) and embedded (S3.5) by the same delivery and becomes **`ready`** — which means searchable, and is committed only after the vectors are persisted. See [docs/development/ingestion.md](docs/development/ingestion.md) |
 | Chunking | [document_processing/chunker.py](document_processing/chunker.py), [document_processing/sections.py](document_processing/sections.py), [document_processing/tokenization.py](document_processing/tokenization.py) | **Complete (M3/S3.4)** — deterministic heading detection, token windows inside sections, references split on entry boundaries, fixed-window fallback; behind a `Tokenizer` seam that since M3/S3.5 holds the **embedding model's own** WordPiece tokenizer (`regex-word/v1` remains for callers that must load no model). Chunks carry section, page span, token count, strategy and tokenizer, and their ids are derived from those, so a version change re-chunks and re-embeds deterministically. See [docs/development/chunking.md](docs/development/chunking.md) and ADR-0012 |
 | PDF text extraction | [document_processing/pdf_parser.py](document_processing/pdf_parser.py), [shared/interfaces/pdf_extraction.py](shared/interfaces/pdf_extraction.py) | **Complete (M3/S3.3)** — PyMuPDF block mode, column-aware reading order, cleaned text, per-page storage in `document_pages`; runs in a killable process under `INGEST_PARSE_TIMEOUT_SECONDS`. No OCR: a scan fails as `no_extractable_text`. See [docs/development/pdf-extraction.md](docs/development/pdf-extraction.md) and ADR-0011 (proposed) |
 | Settings | [backend/config/settings.py](backend/config/settings.py) | **Complete** (insecure secret defaults); validates `DATABASE_URL` uses the asyncpg driver |
 | DB infrastructure | [backend/db/](backend/db/) | **Complete (M1/S1.1)** — `Base` + naming convention, lazy async engine, session factory. Models and migrations `0001`–`0006` since (head `0006`, M3/S3.4: chunk provenance columns and the `chunked` status) |
 | API routers | [backend/api/routers/](backend/api/routers/) | `auth`, `health`, and documents list/get/delete implemented. All 9 protected routes are authorised by permission; upload, search, agents and workspace answer **501** |
 | API schemas | [backend/api/schemas/](backend/api/schemas/) | **Complete** |
-| Services | [backend/services/](backend/services/) | `DocumentService` reads/deletes via repositories and owns the transaction (M1/S1.4); `upload_and_process` validates, stores, records and enqueues (M3/S3.1). Every method takes a **`Principal`, never a `user_id`** (M2/S2.5). **`AuthService` complete (M2/S2.4)** — register and login, bcrypt, JWT issuance. **`IngestionService` complete (M3/S3.2–S3.4)** — the worker's decisions, committing each transition, parsing through `PdfTextExtractor` and chunking through `DocumentChunker`; imports no ARQ, FastAPI, storage backend, PDF library or tokenizer. `SearchService` (M4) still a stub |
+| Services | [backend/services/](backend/services/) | `DocumentService` reads/deletes via repositories and owns the transaction (M1/S1.4); `upload_and_process` validates, stores, records and enqueues (M3/S3.1). Every method takes a **`Principal`, never a `user_id`** (M2/S2.5). **`AuthService` complete (M2/S2.4)** — register and login, bcrypt, JWT issuance. **`IngestionService` complete (M3/S3.2–S3.5)** — the worker's decisions, committing each transition, parsing, chunking and embedding through protocols; imports no ARQ, FastAPI, storage backend, PDF library, embedding model or vector database. **`SearchService` complete (M4/S4.1)** — owner-scoped retrieval; imports no `qdrant_client`, `fastembed`, `numpy` or `vector_db` |
 | Security | [backend/security/](backend/security/) | `jwt_handler` complete (M2/S2.1); `authentication` + `get_current_user` complete and fail-closed (M2/S2.2); `passwords` complete — bcrypt, 12-char/72-byte policy, NFKC (M2/S2.3); **`rbac` + `require_permission` / `require_role` complete (M2/S2.5)** — 401 vs 403, role read fresh from the DB |
-| RAG pipeline | [document_processing/](document_processing/) | Extraction (S3.3) and chunking (S3.4) complete; embedder, metadata extractor and `pipeline.py` **still stubs** |
-| Vector store | [vector_db/qdrant/](vector_db/qdrant/) | Client + config complete; repository all stubs |
+| RAG pipeline | [document_processing/](document_processing/) | Extraction (S3.3), chunking (S3.4) and embedding (S3.5) complete; metadata extractor and `pipeline.py` **still stubs** |
+| Embeddings | [document_processing/embedder.py](document_processing/embedder.py), [shared/interfaces/embedding.py](shared/interfaces/embedding.py) | **Complete (M3/S3.5)** — `FastEmbedProvider` over local `bge-small-en-v1.5`, dimension **measured** at startup, and `FastEmbedTokenizer`, which is what sizes chunks. See [docs/development/embeddings.md](docs/development/embeddings.md) and ADR-0013 |
+| Retrieval | [backend/services/search_service.py](backend/services/search_service.py), [shared/models/retrieval.py](shared/models/retrieval.py) | **Complete (M4/S4.1)** — embeds the query with the same provider, searches Qdrant owner-filtered, then re-validates every candidate against PostgreSQL (ownership, not deleted, `ready`, same model) in one batched statement. The Qdrant payload is never read for authorization. No HTTP route yet: `/api/v1/search` answers 501 (ADR-0014 §9). See [docs/development/retrieval.md](docs/development/retrieval.md) |
+| Vector store | [vector_db/qdrant/](vector_db/qdrant/), [shared/interfaces/vector_store.py](shared/interfaces/vector_store.py) | **Complete (M3/S3.5)** — `VectorStore` protocol with `owner_id` **required** on every operation that can reach a vector, applied inside the Qdrant filter; collection built from the provider's dimension. The scaffold's optional `filters` dict and hard-coded 1536 are gone |
 | Memory | [memory_system/redis/](memory_system/redis/) | Client + config complete; store stubbed **and orphaned** |
 | Agents (×9) | [agents/](agents/) | Identical templates; prompts + configs complete, `run()` is a stub |
 | MCP tools/resources/prompts | [mcp_server/](mcp_server/) | Importable since M0/S0.2; `list_tools` returns all 7 schemas. Handlers still stubs (M6) |
@@ -196,14 +198,15 @@ Edges that **do not exist** despite being documented:
   tokens are obtained over HTTP as of M2/S2.4: `POST /api/v1/auth/register`
   creates an account and `POST /api/v1/auth/login` issues a 60-minute access
   token that `get_current_user` accepts. `SearchService` remains a stub (M4).
-- **No search yet.** The write half of RAG is complete: upload enqueues to ARQ after
-  commit (M3/S3.2), a worker verifies the document, extracts its text into
-  `document_pages` (S3.3), splits that into `document_chunks` (S3.4), embeds them with
-  local FastEmbed and upserts the vectors into Qdrant before committing `ready` (S3.5).
-  A recovery sweep re-queues `pending`, `parsed` and `chunked` documents with no job.
-  What is missing is the **read** half: `SearchService` is a stub, no route queries the
-  vectors, and ADR-0003 §5's re-validation of returned chunk ids against PostgreSQL is
-  not built. Deleting a document also still leaves its vectors behind (ADR-0003 §6).
+- **No route to search, and no generation.** Both halves of retrieval now exist:
+  the write half through the ingestion worker (M3/S3.2–S3.5), and since M4/S4.1 the
+  read half — `SearchService` embeds a query, searches Qdrant filtered on `user_id`,
+  and re-validates every candidate against PostgreSQL before returning it, which is
+  ADR-0003 §5's invariant in full. What is missing above it: no HTTP route or MCP tool
+  calls it (`/api/v1/search` answers 501, ADR-0014 §9), and `AgentInput.context` is
+  still populated by nothing, so retrieval and generation remain unconnected (M5).
+  Deleting a document still leaves its vectors behind (ADR-0003 §6) — S4.1 makes that
+  harmless rather than fixed.
 - **No reranker, no hybrid/BM25 search, no query expansion.**
 
 ---
@@ -212,10 +215,10 @@ Edges that **do not exist** despite being documented:
 
 | Stage | Value | Location | Note |
 |---|---|---|---|
-| Chunking | `CHUNK_SIZE_TOKENS=400`, `CHUNK_OVERLAP_TOKENS=60` | `backend/config/settings.py` | M3/S3.4. Tokens, counted by the provisional `regex-word/v1`; validated so the windows advance |
-| Embeddings | `text-embedding-3-small` (1536-d) | `document_processing/embedder.py:9` | OpenAI model; `openai` not a dependency; no `OPENAI_API_KEY` anywhere |
-| Vector store | Qdrant, Cosine, `vector_size=1536` | `vector_db/qdrant/config.py:12-13` | Dimension hard-coded to match the embedding model |
-| Retrieval | `limit=10`, `score_threshold=0.7` | `backend/api/schemas/search.py:9-10` | Client-controllable; dense-only |
+| Chunking | `CHUNK_SIZE_TOKENS=400`, `CHUNK_OVERLAP_TOKENS=60` | `backend/config/settings.py` | M3/S3.4. Counted by the **embedding model's** tokenizer since M3/S3.5; the worker refuses to start unless a chunk plus its special tokens fits the model |
+| Embeddings | `BAAI/bge-small-en-v1.5` (384-d) | `backend/config/settings.py`, `document_processing/embedder.py` | M3/S3.5. Local FastEmbed (ADR-0004); weights baked into the image; dimension measured at startup, never configured |
+| Vector store | Qdrant, Cosine, dimension from the provider | `vector_db/qdrant/` | M3/S3.5. The hard-coded 1536 was removed; an architecture test scans for the literal |
+| Retrieval | `RETRIEVAL_TOP_K=10`, `RETRIEVAL_SCORE_THRESHOLD=0.7`, `RETRIEVAL_MAX_QUERY_CHARS=2000` | `backend/config/settings.py` | M4/S4.1. Validated at startup and overridable per query; the threshold is a Qdrant cosine similarity, not a probability. Dense-only; no HTTP route yet |
 | Generation | `claude-sonnet-4-20250514`, `max_tokens=4096`, `temp=0.3` | `agents/*/config.py` | Identical across all 9 agents, including the Router |
 
 `ensure_collection_exists()` was a stub that nothing called. As of M3/S3.5 the
@@ -250,7 +253,8 @@ width is refused rather than reused.
   (M2/S2.5), M3/S3.1's upload, storage and ingestion boundary, M3/S3.2's ingestion
   service, queue and worker, M3/S3.3's extraction, extraction models and page
   persistence, M3/S3.4's chunker, sections, tokenizer and chunk persistence, and
-  M3/S3.5's embedding provider, vector-store seam and Qdrant adapter pass
+  M3/S3.5's embedding provider, vector-store seam and Qdrant adapter, and
+  M4/S4.1's search service, retrieval models and chunk validation pass
   strict with no ignores, and CI fails if they stop.
   Repository-wide `mypy .` reports **104 errors** (was 113 before M3/S3.5, which
   replaced several stubs with real code), mostly `empty-body` in M4–M6
