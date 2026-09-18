@@ -21,6 +21,29 @@ against the pre-M0 `mcp/` namespace, `Settings`, or build must be redone.
 | **M9** | Hardening & Observability | Failures visible, bounded and diagnosable | `v0.9.0-rc.1` |
 | **M10** | Release Validation | Release gate passed on a clean machine | `v1.0.0` |
 
+## Sprint breakdown
+
+Only recorded where a milestone has been decomposed in practice. The table above
+is the original outcome-based definition and is **not** rewritten: it defined
+M4 without a sprint breakdown, and that is why ADR-0014 §9 had no sprint to
+point at. Sprints are named as they were built.
+
+| Milestone | Sprint | Outcome | State |
+|---|---|---|---|
+| M3 | S3.1 | Upload, validation, content-addressed storage | Complete |
+| M3 | S3.2 | ARQ ingestion worker, claims, reaper, failure reasons | Complete |
+| M3 | S3.3 | PDF text extraction into `document_pages`, `parsed` | Complete |
+| M3 | S3.4 | Section-aware chunking, provenance, `chunked` | Complete |
+| M3 | S3.5 | Embeddings, vector store, `ready` | Complete |
+| **M4** | **S4.1** | **Retrieval Foundation** — `SearchService`, PostgreSQL re-validation | **Complete** |
+| **M4** | **S4.2** | **Search API & Retrieval Composition Root** — `POST /api/v1/search`, API lifespan owning the provider and Qdrant client | **Complete** |
+
+**M4 is complete when** the HTTP vertical slice works end to end *and* tenant
+isolation is proven over HTTP — an authenticated user retrieving only their own
+chunks, and a second user issuing the identical search retrieving none of them
+(`COMPLETION_PLAN.md` Phase 3 DoD, steps 4–5). Vectors existing in Qdrant is not
+the bar; `ADR-0007` §2 requires flat chunk retrieval to *ship*.
+
 ## Critical path to the first working flow
 
 ```
