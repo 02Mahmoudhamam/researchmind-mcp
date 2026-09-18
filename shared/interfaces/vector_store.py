@@ -135,6 +135,21 @@ class VectorMatch:
     payload: VectorPayload
 
 
+class AsyncCloseable(Protocol):
+    """Something holding a connection pool that must be released.
+
+    Exists so a composition root can *own* an adapter's client — build it at
+    startup, close it at shutdown — without importing the vendor's type. The
+    API's `RetrievalResources` holds one of these; it does not know it is a
+    Qdrant client, and an architecture test asserts it cannot find out
+    (ADR-0014 §11).
+    """
+
+    async def close(self) -> None:
+        """Release the pool. Idempotent enough to be called once on shutdown."""
+        ...
+
+
 class VectorStore(Protocol):
     """Vector persistence and owner-scoped similarity search."""
 

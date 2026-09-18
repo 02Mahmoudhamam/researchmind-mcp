@@ -20,15 +20,17 @@ which is what lets several repository operations take part in one transaction.
 
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.dependencies.database import get_db_session
 from backend.config.settings import get_settings
 from backend.ingestion import ArqIngestionQueue
 from backend.ingestion.queue import redis_settings_from
+from backend.api.composition import RetrievalResources, RetrievalUnavailable
 from backend.services.auth_service import AuthService
 from backend.services.document_service import DocumentService
+from backend.services.search_service import SearchService
 from backend.storage import LocalStorage
 from shared.interfaces.ingestion import IngestionQueue
 from shared.interfaces.storage import Storage
@@ -75,3 +77,47 @@ async def get_auth_service(
     pattern for `DocumentService` in M1/S1.4.
     """
     return AuthService(session)
+
+
+def get_retrieval_resources(request: Request) -> RetrievalResources:
+    """The provider and vector store this process built at startup.
+
+    Read from `app.state`, never constructed here: one process holds one of
+    each for its lifetime (ADR-0014 §11). A missing state attribute means the
+    application was built without running its lifespan, which is a wiring bug
+    in whoever assembled it — so it raises rather than quietly building a
+    second provider and loading the model inside a request.
+    """
+    resources = getattr(request.app.state, "retrieval", None)
+    if not isinstance(resources, RetrievalResources):
+        raise RetrievalUnavailable(
+            "retrieval resources were never built; the application lifespan did not run"
+        )
+    return resources
+
+
+async def get_search_service(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    resources: Annotated[RetrievalResources, Depends(get_retrieval_resources)],
+) -> SearchService:
+    """Build a SearchService over this request's session and the process's
+    provider and vector store.
+
+    The session is per request — it is a transaction boundary. The provider and
+    the vector store are per process. The service is cheap to build and holds
+    no state beyond what it is given, so building one per request costs
+    nothing and keeps the session's lifetime honest.
+
+    Retrieval settings come from `Settings` per request, for the same reason
+    `get_storage` reads `STORAGE_ROOT` per request: configuration read at
+    import is configuration a test can no longer override.
+    """
+    settings = get_settings()
+    return SearchService(
+        session,
+        embedder=resources.embedder,
+        vectors=resources.vectors,
+        top_k=settings.RETRIEVAL_TOP_K,
+        score_threshold=settings.RETRIEVAL_SCORE_THRESHOLD,
+        max_query_chars=settings.RETRIEVAL_MAX_QUERY_CHARS,
+    )
