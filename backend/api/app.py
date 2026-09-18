@@ -9,29 +9,50 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from backend.config.settings import get_settings
+from backend.api.composition import build_retrieval_resources
 from backend.db.engine import dispose_engine
 from backend.api.routers import documents, agents, search, auth, workspace, health
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Release infrastructure held by the process on shutdown.
+    """Own the process-scoped resources retrieval needs; release them after.
 
-    Startup deliberately does nothing. Connecting here would make a reachable
-    database a condition of booting the API, so a momentarily unavailable
-    PostgreSQL would turn into a crash-loop instead of failing requests — and
+    Startup **connects to nothing** (ADR-0014 §12). It loads the embedding
+    model from the image's own disk and constructs a Qdrant client, neither of
+    which touches the network — `AsyncQdrantClient` connects on first use. The
+    database engine still connects lazily, and the Qdrant collection is still
+    the worker's to create.
+
+    That distinction is the design, not an omission. Making a reachable
+    PostgreSQL or Qdrant a condition of booting would turn a momentarily
+    unavailable dependency into a crash-loop instead of failing requests — and
     ``/health`` could no longer answer, which is exactly when a liveness probe
-    matters most. The engine connects on first use instead.
+    matters most.
 
-    Shutdown disposes the connection pool if one was ever created, so a
-    restarting container does not leave sockets open against PostgreSQL.
+    What *is* a condition of booting is the model, because a provider that
+    cannot load cannot serve a single search, and a process that cannot serve
+    should not accept requests (ADR-0014 §11). It is loaded once here rather
+    than per request: ~0.52 s and ~218 MB, paid at boot.
 
-    Qdrant and Redis clients are not disposed here: both are `@lru_cache`d
-    factories with no shutdown hook wired anywhere yet. Adding them is
-    Milestone M9's observability work, not this sprint's.
+    Shutdown closes the Qdrant pool and disposes the database pool if one was
+    ever created, so a restarting container leaves no sockets open.
+
+    Redis is not held here: its client is a separate `@lru_cache`d factory with
+    no shutdown hook wired anywhere yet, and it is the worker's dependency
+    rather than the API's. Milestone M9 owns that.
     """
-    yield
-    await dispose_engine()
+    resources = build_retrieval_resources(get_settings())
+    app.state.retrieval = resources
+    try:
+        yield
+    finally:
+        # Cleared as well as closed. Leaving a closed client on `app.state`
+        # would let a request after shutdown resolve a pool that is gone, and
+        # fail somewhere far from the cause.
+        del app.state.retrieval
+        await resources.aclose()
+        await dispose_engine()
 
 
 # Field names whose submitted value must never be echoed back.

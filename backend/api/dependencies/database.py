@@ -5,8 +5,6 @@ from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.session import get_sessionmaker
-from vector_db.qdrant.client import build_qdrant_client
-from vector_db.qdrant.config import QdrantConfig
 from memory_system.redis.client import get_redis_client
 
 
@@ -39,23 +37,10 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 
-async def get_vector_db():
-    """FastAPI dependency for a Qdrant client.
-
-    Builds one per request and closes it, because M3/S3.5 removed the cached
-    factory this used to call: an `@lru_cache`d client froze configuration at
-    first import and shared one event loop's connection pool with every caller.
-
-    TODO(M4): retrieval should take a client owned by the application's
-    lifespan, as the worker does, rather than one per request.
-    """
-    from backend.config.settings import get_settings
-
-    client = build_qdrant_client(QdrantConfig.from_settings(get_settings()))
-    try:
-        yield client
-    finally:
-        await client.close()
+# `get_vector_db` was removed in M4/S4.2. It built a Qdrant client per request
+# and carried a `TODO(M4)` saying retrieval should take one owned by the
+# application's lifespan. That is now what happens — `backend/api/composition.py`
+# builds one per process — and it had no callers, so nothing replaced it.
 
 
 async def get_memory_store():

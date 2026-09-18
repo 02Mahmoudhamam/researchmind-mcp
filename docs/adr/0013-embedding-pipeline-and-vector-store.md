@@ -1,6 +1,7 @@
 # ADR-0013 — The embedding stage: an authoritative tokenizer, versioned re-chunking, and vectors before READY
 
-- **Status:** Proposed — implemented in Milestone M3/S3.5; supersede if rejected
+- **Status:** Accepted — 2026-09-18, after reconciliation with the implementation
+  (see the Amendment). Proposed and implemented in Milestone M3/S3.5.
 - **Date:** 2026-09-16
 - **Deciders:** Implementation of M3/S3.5, pending owner review
 - **Related:** ADR-0003 §4–§6, ADR-0004, ADR-0005, ADR-0007, ADR-0009, ADR-0011, ADR-0012; Milestone M3/S3.5
@@ -160,3 +161,46 @@ vectors at a time.
 - ADR-0011 §1, ADR-0012 §1–§2 — `ready` means searchable; the tokenizer seam this ADR redeems
 - `docs/security/principles.md` §3 — the ownership filter as a required parameter
 - `docs/development/embeddings.md` — the implementation
+
+## Amendment — 2026-09-18 (Sprint M4/S4.2)
+
+**Nothing above is superseded.** This records two things the original text left
+implicit, which became load-bearing once a second process needed a provider.
+
+### The provider is process-local, and that is the design
+
+§1–§5 were written from inside the ingestion worker, the only process that had
+an `EmbeddingProvider`. M4/S4.2 gives the API one too, and the two are
+**separate Python objects in separate processes**. They are not shared, pooled
+or coordinated, and neither knows the other exists.
+
+ADR-0001 §4 ships one image for both, and §2 of this ADR bakes the weights into
+it, so each process loads the same files from its own disk. Measured on the
+reference machine: **0.52 s** to load with a warm cache, **~218 MB** resident.
+The API loads it **eagerly at startup**, so the cost is paid once per process
+and never inside a request.
+
+### What "the same model" means across processes
+
+ADR-0005 §5 says query and document embeddings "must use the same provider
+instance — enforced by assertion, not by convention". Read literally across two
+processes that is unsatisfiable: there is no shared object to assert on.
+
+The invariant it protects is **vector-space compatibility**, and that is what is
+enforced, in the place that outlives both processes — the database. M4/S4.1's
+validation predicate requires a candidate chunk's `embedding_model_id` **and**
+`dimension` to equal the searching provider's before the chunk can be returned
+(`backend/db/repositories/document_chunk.py`). A chunk embedded by another
+model is dropped rather than ranked.
+
+This is stronger than an in-process assertion, not weaker: it survives restarts,
+it covers chunks written months earlier by a provider object that no longer
+exists, and it is checked on every single search rather than once at wiring
+time. `tokenizer_id` and `strategy_version` (ADR-0012 §5) carry the same
+property for chunk boundaries.
+
+### Collection lifecycle stays with the worker
+
+§3's write order is unchanged, and so is who prepares the collection. The
+worker calls `ensure_collection`; **the API never does** — see ADR-0014's
+amendment for why.

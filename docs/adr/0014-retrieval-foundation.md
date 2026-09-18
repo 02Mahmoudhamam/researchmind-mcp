@@ -1,6 +1,8 @@
 # ADR-0014 — Retrieval: Qdrant proposes, PostgreSQL disposes
 
-- **Status:** Proposed — implemented in Milestone M4/S4.1; supersede if rejected
+- **Status:** Accepted — 2026-09-18, after reconciliation with the implementation
+  (see the Amendment). Proposed and implemented in Milestone M4/S4.1; §9 is
+  resolved by M4/S4.2.
 - **Date:** 2026-09-16
 - **Deciders:** Implementation of M4/S4.1, pending owner review
 - **Related:** ADR-0003 §4–§6, ADR-0004, ADR-0005, ADR-0007, ADR-0013; `docs/security/principles.md` §3; Milestone M4/S4.1
@@ -186,3 +188,72 @@ not fixed, only rendered harmless; ADR-0003 §6 still awaits the deletion path.
 - ADR-0013 §3, §5 — `ready` means searchable; no text in the payload
 - ADR-0005 — the provider's model and dimension, recorded on every chunk
 - `docs/development/retrieval.md` — the implementation
+
+## Amendment — 2026-09-18 (Sprint M4/S4.2)
+
+**§1–§8 and §10 stand unchanged. §9 is resolved**, and the decision it declined
+to take is taken here.
+
+**What §9 said.** "Exposing search over HTTP means deciding whether the API
+process loads a 67 MB model and holds a Qdrant connection pool — a real
+decision, with a real answer, that no ADR has taken." That was accurate when it
+was written and is preserved as the record of why S4.1 stopped where it did.
+
+**What was decided.** The API loads both, in its lifespan, once per process.
+
+### 11. The API owns an eager, process-local composition root
+
+One `EmbeddingProvider` and one Qdrant client are built during FastAPI
+lifespan startup, held on `app.state`, and closed on shutdown. Requests receive
+them; they are never built per request, never built at import, and never built
+inside the route.
+
+Eager rather than lazy because 0.52 s at boot is cheaper than a stall plus a
+first-request race under concurrency, and because a provider that cannot load
+should stop the process from serving rather than fail the first search. If
+construction fails, **startup fails** — the process does not accept requests
+with a half-built composition root.
+
+### 12. The API prepares nothing in the vector store
+
+`ensure_collection` is the **worker's**, and stays there.
+
+This is the one place where §9's original reasoning survives intact: the
+lifespan of `backend/api/app.py` was deliberately given no startup dependency
+so that a momentarily unavailable service could not crash-loop the API and take
+`/health` with it. Creating or asserting the collection is a network call to
+Qdrant, and putting it in API startup would reintroduce exactly that.
+
+Building a client is not a network call — `AsyncQdrantClient` connects on first
+use — so §11 adds no startup dependency. The asymmetry is deliberate: **own the
+resource, do not probe the service.**
+
+The cost is that ADR-0005 §3's startup dimension assertion runs in the worker
+only. The API's protection is ADR-0013's amendment: the per-search
+`embedding_model_id`/`dimension` predicate, which is checked on every query
+rather than once at boot.
+
+### 13. The HTTP response is its own type
+
+`RetrievalResult` is the service contract and is **not** serialised to the
+wire. `backend/api/schemas/search.py` defines a public DTO built from it,
+carrying only what a caller needs: `chunk_id`, `document_id`, `content`,
+`score`, `section`, `page_start`, `page_end`, `embedding_model_id`.
+
+No vector, no ORM row, no Qdrant point, no `Principal`. The scaffold's
+`SearchResponse` wrapped `shared.models.document.SearchResult`, whose
+`DocumentChunk` carries an `embedding` field — shipping it would have put
+vectors on the wire. An architecture test now forbids the shape.
+
+The response echoes no `query`. The caller already has it, and a research
+question in a response body is a sensitive string in every proxy log that
+records bodies (`principles.md` §7). `{results, total}` is the whole contract.
+
+### 14. Errors keep the service's classification
+
+`InvalidSearchQuery` → **400**, `SearchUnavailable` → **503**, unauthenticated
+→ 401, unauthorised → 403. Each carries a fixed sentence written in the router,
+never the exception's own text, matching the upload route's convention. §6's
+distinction — an outage is not an empty result — is what makes the 503
+meaningful, and `COMPLETION_PLAN.md`'s Phase 5 DoD already specified that code
+for this endpoint.

@@ -21,7 +21,7 @@ import base64
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Iterator
 
 import jwt as pyjwt
 import pytest
@@ -181,6 +181,27 @@ async def _create(
     )
     await session.commit()
     return user
+
+
+@pytest.fixture(autouse=True)
+def _search_without_infrastructure() -> Iterator[None]:
+    """Give the search route a service, without a model or a Qdrant.
+
+    Since M4/S4.2 that route resolves a `SearchService` from what the
+    application lifespan builds, and this file's client runs no lifespan — it
+    is about 401 versus not-401, and should not load a 67 MB model to find out.
+    The override makes the route reachable; what it returns is asserted in
+    `tests/integration/test_search_api.py`.
+    """
+    from backend.api.dependencies.services import get_search_service
+
+    class _NoResults:
+        async def search(self, query: object, principal: object) -> tuple[()]:
+            return ()
+
+    app.dependency_overrides[get_search_service] = lambda: _NoResults()
+    yield
+    app.dependency_overrides.pop(get_search_service, None)
 
 
 @pytest.fixture

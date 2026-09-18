@@ -1,70 +1,86 @@
 # Development Workflow
 
-How work moves from a sprint definition to a tagged, validated state on `main`.
+How work moves from a sprint definition to a validated state on `main`.
+
+> **Corrected 2026-09-18 (M4/S4.2).** This page described a three-tier model —
+> `sprint/*` → `milestone/*` → `main`, squash-merged — that the project has
+> never used. Twenty sprints merged directly to `main` with `--no-ff`, no
+> `milestone/*` branch was ever created, and no sprint history was squashed.
+> `docs/README.md` says "when a document and the code disagree, the code wins
+> and the document is a bug", so the page was the bug. What follows is what the
+> history actually shows.
 
 ## Branch strategy
 
 ```
-main  ────●────────────────●────────────────●──────────────►
-       v0.0.1           v0.1.0           v0.2.0
-      foundation        M0 done          M1+M2 done
-          │                ▲                ▲
-          │   milestone/m0 │   milestone/m1 │
-          └──●──●──●───────┘   └──●──●──────┘
-             │  │  │             │  │
-      sprint/m0-s01           sprint/m1-s11
-      sprint/m0-s02           sprint/m1-s12
+main  ────●──────●──────●──────●──────●──────●──────►
+          ▲      ▲      ▲      ▲      ▲      ▲
+          │      │      │      │      │      │   --no-ff merge commits,
+          │      │      │      │      │      │   one per sprint
+   sprint/m3-s31 │      │  sprint/m3-s35      │
+          sprint/m3-s32 │         sprint/m4-s41
+                 sprint/m3-s33         sprint/m4-s42
 ```
 
 | Branch | Purpose | Lifetime |
 |---|---|---|
-| `main` | Stable. **Only validated milestone states.** Protected. | Permanent |
-| `milestone/mX-name` | Integration point for one milestone's sprints | Until the milestone merges |
-| `sprint/mX-sYY-name` | One sprint's work | Until its PR merges |
+| `main` | Stable. Every sprint lands here validated. Protected. | Permanent |
+| `sprint/mX-sYY-name` | One sprint's work | **Retained after merge** unless deletion is explicitly authorised |
 | `fix/name`, `docs/name`, `chore/name` | Small standalone changes | Until merged |
 
-**No `develop` branch.** There is no release train to stabilise, so a
-permanently-diverging integration branch would add a merge step for no benefit.
-This is not GitFlow: no `develop`, no `release/*`, no `hotfix/*`.
+**No `develop` branch, and no `milestone/*` branch.** There is no release train
+to stabilise. This is not GitFlow: no `develop`, no `release/*`, no `hotfix/*`.
 
-### Why milestone branches exist
+### Why there is no milestone branch
 
-Merging each *sprint* straight to `main` would put half-finished milestones
-there. For **M2 that is a security problem**: M2 spans two sprints, and merging
-only the first leaves `main` able to mint tokens while `get_current_user` still
-fails open. The milestone branch exists so that **security-relevant milestones
-land atomically**.
+The original argument was that a half-finished milestone on `main` is a security
+problem — M2 merging token issuance before `get_current_user` was fail-closed.
+In practice each sprint has been made **independently safe to merge**: a sprint
+that would leave `main` in a worse state than it found it is not finished. M2's
+five sprints each landed with authentication no weaker than before, which is
+the property the milestone branch was meant to buy, obtained more cheaply.
+
+The cost is that `main` shows in-progress milestones. That is why every
+milestone's state is recorded honestly in `docs/roadmap/MILESTONES.md` and
+`CLAUDE.md` rather than inferred from the branch graph.
 
 ## Sprint cycle
 
 ```
-1. git switch milestone/mX && git pull
+1. git switch main && git pull --ff-only
 2. git switch -c sprint/mX-sYY-short-name
 3. Implement — commit logical units as you go, not one blob at the end
-4. Run the sprint's required tests locally; they must pass
+4. Run the sprint's required gates locally; they must pass
 5. git push -u origin sprint/mX-sYY-short-name
-6. Open a PR into milestone/mX and fill the template honestly
-7. CI green + self-review against the sprint Definition of Done
-8. Squash-merge, delete the branch
+6. Re-verify main has not moved; run the gates again if it has
+7. git switch main && git merge --no-ff sprint/mX-sYY-short-name
+8. Run the important gates AGAIN on main after the merge
+9. git push origin main          # never --force
+10. Keep the branch. Delete only when explicitly authorised
 ```
 
-Squash-merging sprint → milestone keeps the milestone branch readable (one
-commit per sprint) while the PR preserves the detailed work.
+**Never squash a sprint.** The per-sprint commits are the audit record of how a
+decision was reached, including the tests that failed first. The `--no-ff`
+merge commit carries the sprint's summary and evidence; the commits under it
+carry the working.
+
+**Never rebase, amend or force-push anything that has been pushed.**
 
 ## Milestone cycle
 
 ```
-1. All sprints merged into milestone/mX
-2. Run milestone validation: full test suite + the milestone Exit Criteria
+1. Every sprint of the milestone merged to main, each with its gates green
+2. Run milestone validation on main: full suite + the milestone Exit Criteria
 3. Verify every Definition-of-Done item, with recorded evidence
-4. Open a PR milestone/mX → main, titled with the milestone outcome
-5. The PR body lists Exit Criteria with evidence — this is the audit record
-6. CI green on the full suite
-7. MERGE COMMIT (never squash) — preserves per-sprint history on main
-8. git tag -a vX.Y.0 -m "Milestone X: <outcome>"
-9. git push origin main --follow-tags
-10. Delete the milestone branch
+4. Record the milestone's completion in MILESTONES.md and CLAUDE.md
+5. git tag -a vX.Y.0 -m "Milestone X: <outcome>"   # only when authorised
+6. git push origin main --follow-tags
 ```
+
+**Tags are not automatic.** No milestone tag has been created in this
+repository to date; `v0.0.1` marks the repository foundation. A tag is created
+only when the owner asks for one, because a tag is a claim that a milestone's
+exit criteria were met.
 
 ## Non-negotiable gates
 
