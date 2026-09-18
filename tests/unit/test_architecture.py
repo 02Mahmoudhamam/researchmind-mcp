@@ -911,3 +911,135 @@ class TestRetrievalDependsOnProtocolsOnly:
         """Search is read-only; repositories still do not own transactions."""
         code = _statements(self.SERVICE)
         assert ".commit()" not in code
+
+
+class TestTheSearchApiStaysAnAdapter:
+    """M4/S4.2. ADR-0014 §11–§13: the route is thin, the composition root owns
+    infrastructure, and neither lets a vendor type reach a client."""
+
+    ROUTER = ROOT / "backend" / "api" / "routers" / "search.py"
+    SCHEMAS = ROOT / "backend" / "api" / "schemas" / "search.py"
+    COMPOSITION = ROOT / "backend" / "api" / "composition.py"
+
+    @staticmethod
+    def _imports(path: pathlib.Path) -> set[str]:
+        import ast
+
+        names: set[str] = set()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                names.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                names.add(node.module or "")
+        return names
+
+    def test_no_api_module_imports_a_vendor(self) -> None:
+        """Not just the route: nothing under `backend/api/` names one.
+
+        The composition root is allowed to know which adapter it builds — that
+        is what a composition root is for — but it reaches it through
+        `vector_db` and `document_processing`, never through `qdrant_client`
+        or `fastembed`. `RetrievalResources.client` is typed as `AsyncCloseable`
+        for exactly this reason.
+        """
+        forbidden = ("qdrant_client", "fastembed", "numpy", "onnxruntime")
+        offenders = {
+            f"{path.relative_to(ROOT)}: {name}"
+            for path in sorted((ROOT / "backend" / "api").rglob("*.py"))
+            if "__pycache__" not in path.parts
+            for name in self._imports(path)
+            if name.split(".")[0] in forbidden
+        }
+        assert offenders == set()
+
+    def test_the_route_builds_no_infrastructure(self) -> None:
+        """Everything arrives through `Depends`. A route that constructed a
+        provider would load a model inside a request."""
+        code = _statements(self.ROUTER)
+        for constructor in (
+            "FastEmbedProvider(",
+            "QdrantVectorStore(",
+            "build_qdrant_client(",
+            "SearchService(",
+            "build_retrieval_resources(",
+        ):
+            assert constructor not in code, constructor
+
+    def test_the_route_reaches_no_database_directly(self) -> None:
+        """Ownership validation is the repository's, through the service."""
+        imports = self._imports(self.ROUTER)
+        assert not any(name.startswith("sqlalchemy") for name in imports)
+        assert not any(name.startswith("backend.db") for name in imports)
+
+    def test_the_route_does_not_reimplement_retrieval(self) -> None:
+        """ADR-0014 §1: the search is `SearchService`'s, start to finish."""
+        code = _statements(self.ROUTER)
+        for leaked in (
+            ".search(",
+            "embed_query",
+            "owner_id=",
+            "validate_for_retrieval",
+        ):
+            if leaked == ".search(":
+                assert code.count(leaked) == 1, "exactly one call, to the service"
+                continue
+            assert leaked not in code, leaked
+
+    def test_the_public_response_cannot_carry_a_vector(self) -> None:
+        from backend.api.schemas.search import SearchHit, SearchRequest, SearchResponse
+
+        assert "embedding" not in SearchHit.model_fields
+        assert not {"vector", "payload", "chunk"} & set(SearchHit.model_fields)
+        # A float list is the shape a vector would arrive in.
+        for name, field in SearchHit.model_fields.items():
+            assert field.annotation is not list, name
+        assert set(SearchResponse.model_fields) == {"results", "total"}
+        assert SearchRequest.model_config.get("extra") == "forbid"
+
+    def test_the_request_cannot_carry_an_owner(self) -> None:
+        """`principles.md` §3: the safe path is the only path."""
+        from backend.api.schemas.search import SearchRequest
+
+        assert not {"user_id", "owner_id", "principal", "email"} & set(
+            SearchRequest.model_fields
+        )
+
+    def test_the_route_takes_its_owner_from_the_principal(self) -> None:
+        code = _statements(self.ROUTER)
+        assert "service.search(query, principal)" in code
+
+    def test_the_composition_root_does_not_prepare_the_collection(self) -> None:
+        """ADR-0014 §12. Own the resource, do not probe the service — a network
+        call at startup would put Qdrant between the process and `/health`."""
+        code = _statements(self.COMPOSITION)
+        assert "ensure_collection" not in code
+        lifespan = _statements(ROOT / "backend" / "api" / "app.py")
+        assert "ensure_collection" not in lifespan
+
+    def test_the_api_builds_its_provider_in_exactly_one_place(self) -> None:
+        constructors = {
+            str(path.relative_to(ROOT))
+            for path in sorted((ROOT / "backend").rglob("*.py"))
+            if "__pycache__" not in path.parts
+            and "FastEmbedProvider(" in _statements(path)
+        }
+        assert constructors == {
+            "backend/api/composition.py",
+            "backend/ingestion/worker.py",
+        }
+
+    def test_nothing_builds_a_qdrant_client_per_request(self) -> None:
+        """The dependency that used to is gone; the lifespan owns one."""
+        dependencies = ROOT / "backend" / "api" / "dependencies"
+        for path in sorted(dependencies.rglob("*.py")):
+            if "__pycache__" in path.parts:
+                continue
+            assert "build_qdrant_client(" not in _statements(path), path
+
+    def test_the_search_service_is_still_infrastructure_independent(self) -> None:
+        """S4.2 must not have moved anything into it, or out of it."""
+        service = ROOT / "backend" / "services" / "search_service.py"
+        imports = self._imports(service)
+        assert not any(name.startswith("fastapi") for name in imports)
+        assert not any(name.startswith("vector_db") for name in imports)
+        assert not any(name.startswith("qdrant_client") for name in imports)

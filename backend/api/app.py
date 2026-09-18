@@ -42,11 +42,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     no shutdown hook wired anywhere yet, and it is the worker's dependency
     rather than the API's. Milestone M9 owns that.
     """
-    app.state.retrieval = build_retrieval_resources(get_settings())
+    resources = build_retrieval_resources(get_settings())
+    app.state.retrieval = resources
     try:
         yield
     finally:
-        await app.state.retrieval.aclose()
+        # Cleared as well as closed. Leaving a closed client on `app.state`
+        # would let a request after shutdown resolve a pool that is gone, and
+        # fail somewhere far from the cause.
+        del app.state.retrieval
+        await resources.aclose()
         await dispose_engine()
 
 
