@@ -738,6 +738,110 @@ class TestTenantIsolationOverHttp:
         assert response.status_code == 200
         assert response.json() == {"results": [], "total": 0}
 
+    async def test_a_non_ready_document_disappears_from_results(
+        self,
+        committing_session: Any,
+        corpus: dict[str, Any],
+        http_with_stub_provider: None,
+    ) -> None:
+        """Its vectors are untouched; only the row's status changes.
+
+        ADR-0014 §3: the existence of a vector proves nothing, because vectors
+        outlive the documents they describe. PostgreSQL's status at the moment
+        of the query is what decides, and this proves it through HTTP.
+        """
+        async with app.router.lifespan_context(app):
+            async with await _client() as client:
+                before = await client.post(
+                    SEARCH,
+                    json={"query": "what did the study measure?"},
+                    headers=_bearer(corpus["alice"]["token"]),
+                )
+                assert before.json()["total"] > 0
+
+                await committing_session.execute(
+                    text("UPDATE documents SET status = 'chunked' WHERE id = :id"),
+                    {"id": uuid.UUID(corpus["alice"]["document_id"])},
+                )
+                await committing_session.commit()
+
+                after = await client.post(
+                    SEARCH,
+                    json={"query": "what did the study measure?"},
+                    headers=_bearer(corpus["alice"]["token"]),
+                )
+
+        assert after.json() == {"results": [], "total": 0}
+
+    async def test_a_candidate_the_index_wrongly_offers_is_still_refused(
+        self,
+        committing_session: Any,
+        corpus: dict[str, Any],
+        http_with_stub_provider: None,
+    ) -> None:
+        """Defence in depth, proved by breaking the first layer.
+
+        Alice's chunk is re-upserted with a payload claiming Bob owns it, so
+        Qdrant genuinely hands it to Bob's search. PostgreSQL is asked for the
+        chunk *id* and answers that it is Alice's, so Bob still gets nothing —
+        which is the whole reason ADR-0003 §5 has two layers rather than one.
+        """
+        import dataclasses
+
+        from shared.interfaces.vector_store import VectorRecord
+        from vector_db.qdrant.client import build_qdrant_client
+        from vector_db.qdrant.config import QdrantConfig
+        from vector_db.qdrant.repository import QdrantVectorStore
+
+        config = QdrantConfig.from_settings(get_settings())
+        client = build_qdrant_client(config)
+        store = QdrantVectorStore(client, config)
+
+        async with get_sessionmaker()() as session:
+            row = await session.execute(
+                text(
+                    "SELECT id FROM document_chunks WHERE document_id = :id"
+                    " ORDER BY chunk_index LIMIT 1"
+                ),
+                {"id": uuid.UUID(corpus["alice"]["document_id"])},
+            )
+            stolen = str(row.scalar_one())
+
+        bob_id = await _owner_id_of(corpus["bob"]["document_id"])
+        found = await store.search(
+            (0.0,) * STUB_DIMENSION,
+            owner_id=await _owner_id_of(corpus["alice"]["document_id"]),
+            limit=100,
+            score_threshold=-1.0,
+        )
+        original = next(match for match in found if match.id == stolen)
+        await store.upsert(
+            [
+                VectorRecord(
+                    id=stolen,
+                    vector=original_vector(),
+                    payload=dataclasses.replace(original.payload, user_id=bob_id),
+                )
+            ]
+        )
+        offered = await store.search(
+            (0.0,) * STUB_DIMENSION, owner_id=bob_id, limit=100, score_threshold=-1.0
+        )
+        assert stolen in {m.id for m in offered}, "the index must really offer it"
+        await client.close()
+
+        async with app.router.lifespan_context(app):
+            async with await _client() as client_http:
+                response = await client_http.post(
+                    SEARCH,
+                    json={"query": "what did the study measure?"},
+                    headers=_bearer(corpus["bob"]["token"]),
+                )
+
+        assert response.status_code == 200
+        returned = {hit["chunk_id"] for hit in response.json()["results"]}
+        assert stolen not in returned
+
     async def test_a_deleted_document_disappears_from_results(
         self,
         committing_session: Any,
@@ -779,3 +883,18 @@ class _RecordingQueue:
     async def enqueue(self, job: IngestionJob) -> bool:
         self.jobs.append(job)
         return True
+
+
+def original_vector() -> tuple[float, ...]:
+    """Any unit vector of the stub's width; the payload is what matters here."""
+    value = 1.0 / (STUB_DIMENSION**0.5)
+    return tuple(value for _ in range(STUB_DIMENSION))
+
+
+async def _owner_id_of(document_id: str) -> str:
+    async with get_sessionmaker()() as session:
+        row = await session.execute(
+            text("SELECT user_id FROM documents WHERE id = :id"),
+            {"id": uuid.UUID(document_id)},
+        )
+        return str(row.scalar_one())
