@@ -17,7 +17,7 @@ ADR-0014 §11–§14; `principles.md` §3 and §7.
 import io
 import uuid
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Iterator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -118,7 +118,7 @@ async def _client() -> AsyncClient:
 
 
 @pytest.fixture
-def stub_service() -> AsyncIterator[StubSearchService]:
+def stub_service() -> Iterator[StubSearchService]:
     """Install a stub `SearchService`; remove it afterwards."""
     stub = StubSearchService()
     app.dependency_overrides[get_search_service] = lambda: stub
@@ -664,20 +664,19 @@ class TestTenantIsolationOverHttp:
             await client.close()
 
     @pytest.fixture()
-    def http_with_stub_provider(self) -> AsyncIterator[None]:
+    def http_with_stub_provider(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Serve the route with the stub provider the corpus was embedded by.
 
-        The real model is exercised by the vertical slice below; using it here
-        too would add a minute to a test about ownership. The provider must
-        still be the *same one* the chunks record, or S4.1's model predicate
-        drops every candidate — which is the point of that predicate.
+        The real model is exercised by `tests/e2e/test_vertical_slice.py`; using
+        it here too would add a minute to tests about ownership. The provider
+        must still be the *same one* the chunks record, or S4.1's model
+        predicate drops every candidate — which is the point of that predicate.
         """
         from backend.api import composition
 
-        original = composition.FastEmbedProvider
-        composition.FastEmbedProvider = lambda *a, **k: StubEmbeddingProvider()  # type: ignore[assignment]
-        yield
-        composition.FastEmbedProvider = original  # type: ignore[assignment]
+        monkeypatch.setattr(
+            composition, "FastEmbedProvider", lambda *a, **k: StubEmbeddingProvider()
+        )
 
     async def test_a_user_retrieves_their_own_document(
         self, corpus: dict[str, Any], http_with_stub_provider: None

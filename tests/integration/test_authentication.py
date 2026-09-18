@@ -21,7 +21,7 @@ import base64
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Iterator
 
 import jwt as pyjwt
 import pytest
@@ -184,7 +184,7 @@ async def _create(
 
 
 @pytest.fixture(autouse=True)
-def _search_without_infrastructure() -> AsyncIterator[None]:
+def _search_without_infrastructure() -> Iterator[None]:
     """Give the search route a service, without a model or a Qdrant.
 
     Since M4/S4.2 that route resolves a `SearchService` from what the

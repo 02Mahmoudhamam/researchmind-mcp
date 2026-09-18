@@ -253,9 +253,10 @@ a real Qdrant for another tenant's vectors and get nothing back.
 
 ## Not done
 
-- **No retrieval API.** Retrieval itself exists as of M4/S4.1, including
-  ADR-0003 §5's second layer — see [retrieval.md](retrieval.md) — but no HTTP
-  route or MCP tool calls it yet.
+- **A retrieval API exists** as of M4/S4.2 — `POST /api/v1/search`, see
+  [retrieval.md](retrieval.md). No MCP tool calls it yet (M6). The API loads its
+  own provider at startup, process-local and eager; it never creates the
+  collection, which stays this pipeline's (ADR-0014 §12).
 - **No vector deletion on document delete.** ADR-0003 §6 remains
   half-implemented: `delete_document` exists on the store, and the API's delete
   path does not call it yet. Recorded as deferred in ADR-0013. M4/S4.1 makes it

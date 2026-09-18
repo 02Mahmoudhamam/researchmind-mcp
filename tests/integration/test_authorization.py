@@ -18,7 +18,7 @@ lets an administrator read someone else's manuscript.
 
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Iterator
 
 import jwt as pyjwt
 import pytest
@@ -185,7 +185,7 @@ def _authorisation_dependencies(route: APIRoute) -> list[object]:
 
 
 @pytest.fixture(autouse=True)
-def _search_without_infrastructure() -> AsyncIterator[None]:
+def _search_without_infrastructure() -> Iterator[None]:
     """Give the search route a service, without a model or a Qdrant.
 
     Since M4/S4.2 the route resolves a `SearchService` from the resources the

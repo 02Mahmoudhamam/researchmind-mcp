@@ -15,10 +15,11 @@
 #                   and to section-aware chunking          — M3/S3.4
 #                   and to embeddings                      — M3/S3.5
 #                   and to retrieval                       — M4/S4.1
+#                   and to the search API                  — M4/S4.2
 #
 # mypy is promoted at M2 as scheduled, but over the finished surface only — not
 # the whole repository — and the scope is the honest part. `mypy .` still
-# reports 104 errors, most of them `empty-body`: stubs in M4–M6 subsystems that
+# reports 101 errors, most of them `empty-body`: stubs in M4–M6 subsystems that
 # declare a non-Optional return and then `...`. Those are the unimplemented
 # system, not type bugs, and enforcing them would mean a permanently red
 # pipeline or blanket ignores; both teach people to ignore CI.
@@ -33,7 +34,8 @@
 # detection, the tokenizer and its seam, and chunk persistence; and since
 # M3/S3.5 the embedding provider, its authoritative tokenizer, the vector
 # store seam and the Qdrant adapter; and since M4/S4.1 the search service, the
-# retrieval models and the chunk validation behind them.
+# retrieval models and the chunk validation behind them; and since M4/S4.2 the
+# API's composition root, application factory, search route and public schemas.
 # `--follow-imports=silent` limits reporting to the listed files while still
 # type-checking against everything they import.
 # Each later sprint adds the files it makes real.
@@ -212,7 +214,11 @@ jobs:
             shared/interfaces/vector_store.py \
             vector_db/qdrant/ \
             backend/services/search_service.py \
-            shared/models/retrieval.py
+            shared/models/retrieval.py \
+            backend/api/composition.py \
+            backend/api/app.py \
+            backend/api/routers/search.py \
+            backend/api/schemas/search.py
 
       - name: Assert `import mcp` resolves to the SDK, not this repository
         run: |

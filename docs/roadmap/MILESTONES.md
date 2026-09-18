@@ -36,13 +36,26 @@ point at. Sprints are named as they were built.
 | M3 | S3.4 | Section-aware chunking, provenance, `chunked` | Complete |
 | M3 | S3.5 | Embeddings, vector store, `ready` | Complete |
 | **M4** | **S4.1** | **Retrieval Foundation** — `SearchService`, PostgreSQL re-validation | **Complete** |
-| **M4** | **S4.2** | **Search API & Retrieval Composition Root** — `POST /api/v1/search`, API lifespan owning the provider and Qdrant client | **In progress** |
+| **M4** | **S4.2** | **Search API & Retrieval Composition Root** — `POST /api/v1/search`, API lifespan owning the provider and Qdrant client | Complete |
 
 **M4 is complete when** the HTTP vertical slice works end to end *and* tenant
 isolation is proven over HTTP — an authenticated user retrieving only their own
 chunks, and a second user issuing the identical search retrieving none of them
 (`COMPLETION_PLAN.md` Phase 3 DoD, steps 4–5). Vectors existing in Qdrant is not
 the bar; `ADR-0007` §2 requires flat chunk retrieval to *ship*.
+
+**M4 met that bar on 2026-09-18.** `tests/e2e/test_vertical_slice.py` runs
+steps 1–5 against real PostgreSQL, real Qdrant and the real FastEmbed model:
+register and log in through `/api/v1/auth`, upload a real PDF, poll to `ready`,
+search and receive scored and sectioned hits, and a second authenticated user
+issuing the identical search receives none of them. Fourteen mutations over the
+new security surface are each caught. **No `v0.4.0` tag has been created** — no
+milestone tag has ever been created in this repository, and a tag is the owner's
+to ask for.
+
+Still outside M4, and deliberately: generation (M5), MCP (M6), parent-document
+retrieval and the evaluation harness (M7), and deleting vectors with their
+documents (Phase 5, task 5.5 — S4.1 makes stale vectors harmless, not absent).
 
 ## Critical path to the first working flow
 

@@ -195,22 +195,82 @@ the model (`top_k > 0`, `0 ≤ threshold ≤ 1`) and at startup by Settings.
 `bge-small-en-v1.5` (ADR-0013). It is not a probability and it is not comparable
 across embedding models; changing the model changes what 0.7 means.
 
-## No HTTP route yet
+## The HTTP endpoint
 
-`POST /api/v1/search` still answers **501**.
+```
+POST /api/v1/search        Authorization: Bearer <token>
+{"query": "...", "top_k": 10?, "score_threshold": 0.7?, "document_ids": [...]?}
+```
 
-Not caution: exposing it means deciding whether the API process loads a 67 MB
-embedding model and holds a Qdrant connection pool. The API's `lifespan`
-deliberately does nothing — so a momentarily unavailable dependency cannot
-crash-loop the process and stop `/health` answering — and ADR-0004/0005/0013 put
-the model and the client in the **worker's** composition root. ADR-0014 §9
-records that as the next M4 sprint's decision.
+```json
+{"results": [{"chunk_id": "...", "document_id": "...", "score": 0.74,
+              "content": "...", "chunk_index": 3, "section": "3.1 Evaluation",
+              "page_start": 2, "page_end": 3,
+              "embedding_model_id": "BAAI/bge-small-en-v1.5"}],
+ "total": 1}
+```
 
-Until then `SearchService` is constructed directly, as the integration tests do.
+Added in M4/S4.2 (ADR-0014 §11–§14). The route is thin by construction: it
+turns a request into a `RetrievalQuery`, hands it the authenticated
+`Principal`, and narrows the answer. An architecture test asserts it contains
+exactly one `.search(` call and no `owner_id=`, `embed_query` or database
+import.
+
+| | |
+|---|---|
+| Permission | `SEARCH_QUERY` — viewer, researcher and admin |
+| 400 | `InvalidSearchQuery` — empty, or longer than the model reads |
+| 422 | a malformed body: `top_k <= 0`, a threshold outside 0–1, **or any unexpected field** |
+| 401 / 403 | unauthenticated / wrong role, unchanged from M2 |
+| 503 | `SearchUnavailable` — the provider, index or database failed |
+
+**The response is its own type.** `RetrievalResult` is the service contract and
+is never serialised; `SearchHit` is built from it field by field, so a field
+added to the service does not silently appear on the wire. No vector, no ORM
+row, no Qdrant point, no `Principal`.
+
+**The query is not echoed back.** The caller already has it, and a research
+question in a response body is a sensitive string in every proxy log that
+records bodies (`principles.md` §7).
+
+**There is no owner field on the request**, and the schema forbids extras — so
+a body naming another user is a 422 rather than an escalation.
+
+### What the API owns, and what it does not
+
+`backend/api/composition.py` builds **one** `EmbeddingProvider` and **one**
+Qdrant client per process, in the FastAPI lifespan, and closes them on
+shutdown. Neither is built per request; a route that did would load the model
+inside a request.
+
+**Startup connects to nothing.** Loading the model reads the image's own disk
+(ADR-0004 §2 bakes it in) and constructing a Qdrant client opens no socket. So
+a momentarily unavailable PostgreSQL or Qdrant still cannot crash-loop the API
+or stop `/health` answering — the property `app.py`'s lifespan existed to
+protect before this sprint.
+
+**The API never creates the collection.** That is `ensure_collection`, it is a
+network call, and it stays the worker's (ADR-0014 §12). The visible consequence
+is that on a system where the worker has never run, search returns **503**
+rather than an empty 200 — the index genuinely is not there, and saying "no
+matches" would be a lie about the corpus. There is a test for it.
+
+What *is* a condition of booting is the model: a provider that cannot load
+means a process that cannot answer a single search, so startup fails rather
+than serving.
+
+### The provider is process-local
+
+The API and the worker hold separate provider objects and coordinate through
+nothing. ADR-0005 §5's "same provider instance" is unsatisfiable across
+processes; what it protects — vector-space compatibility — is enforced in the
+database instead, by the per-search `embedding_model_id` and `dimension`
+predicate (ADR-0013's amendment). That is checked on every query rather than
+once at wiring time.
 
 ## Not done
 
-- **No route**, as above; no MCP tool either (M6).
+- **No MCP tool.** `mcp_server/` still has stub handlers (M6).
 - **No generation.** `AgentInput.context` is still populated by nothing (M5).
 - **No reranking, no hybrid or BM25 search, no query expansion.**
 - **No parent-document retrieval** — ADR-0007 deferred it; `section` and the
