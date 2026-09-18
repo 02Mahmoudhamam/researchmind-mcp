@@ -36,7 +36,7 @@ point at. Sprints are named as they were built.
 | M3 | S3.4 | Section-aware chunking, provenance, `chunked` | Complete |
 | M3 | S3.5 | Embeddings, vector store, `ready` | Complete |
 | **M4** | **S4.1** | **Retrieval Foundation** — `SearchService`, PostgreSQL re-validation | **Complete** |
-| **M4** | **S4.2** | **Search API & Retrieval Composition Root** — `POST /api/v1/search`, API lifespan owning the provider and Qdrant client | **Complete** |
+| **M4** | **S4.2** | **Search API & Retrieval Composition Root** — `POST /api/v1/search`, API lifespan owning the provider and Qdrant client | **In progress** |
 
 **M4 is complete when** the HTTP vertical slice works end to end *and* tenant
 isolation is proven over HTTP — an authenticated user retrieving only their own
