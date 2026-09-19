@@ -15,7 +15,7 @@
     "react-dom": "^18.3.0",
     "axios": "^1.7.0",
     "@tanstack/react-query": "^5.40.0",
-    "zustand": "^4.5.0",
+    "zustand": "^5.0.15",
     "react-dropzone": "^14.2.0",
     "recharts": "^2.12.0",
     "lucide-react": "^0.383.0"
