@@ -27,7 +27,7 @@ alembic = "^1.13"
 qdrant-client = "^1.10.0"
 redis = "^5.0.0"
 pymupdf = "^1.24.0"
-langchain-text-splitters = "^0.2.0"
+langchain-text-splitters = ">=0.2,<1.2"
 # PyJWT rather than python-jose. Both were patched at the versions pinned here,
 # so this is a dependency-surface decision, not a CVE response: python-jose
 # requires `ecdsa`, which carries GHSA-wj6h-64fc-37mp (high, Minerva timing
